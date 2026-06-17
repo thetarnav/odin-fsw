@@ -1,4 +1,5 @@
-package test_fsw
+#+test
+package fsw
 
 import "core:fmt"
 import "core:os"
@@ -7,12 +8,11 @@ import "core:strings"
 import "core:sync"
 import "core:testing"
 import "core:time"
-import "../fsw"
 
 // === Event collector ===
 
 Collected_Event :: struct {
-	kind: fsw.Event_Kind,
+	kind: Event_Kind,
 	path: string,
 }
 
@@ -25,7 +25,7 @@ collector_init :: proc(c: ^Collector) {
 	c.events = make([dynamic]Collected_Event, 0, 64, context.temp_allocator)
 }
 
-collector_cb :: proc(event: ^fsw.Event) {
+collector_cb :: proc(event: ^Event) {
 	c := (^Collector)(context.user_ptr)
 	if c == nil do return
 	sync.mutex_lock(&c.mu)
@@ -54,7 +54,7 @@ collector_wait :: proc(c: ^Collector, min_count: int, timeout: time.Duration) ->
 	return false
 }
 
-collector_has_kind_path :: proc(c: ^Collector, kind: fsw.Event_Kind, path_substr: string) -> bool {
+collector_has_kind_path :: proc(c: ^Collector, kind: Event_Kind, path_substr: string) -> bool {
 	sync.mutex_lock(&c.mu)
 	defer sync.mutex_unlock(&c.mu)
 	for ev in c.events {
@@ -65,7 +65,7 @@ collector_has_kind_path :: proc(c: ^Collector, kind: fsw.Event_Kind, path_substr
 	return false
 }
 
-collector_count_kind :: proc(c: ^Collector, kind: fsw.Event_Kind) -> int {
+collector_count_kind :: proc(c: ^Collector, kind: Event_Kind) -> int {
 	count := 0
 	sync.mutex_lock(&c.mu)
 	defer sync.mutex_unlock(&c.mu)
@@ -136,10 +136,10 @@ test_poll_file_watcher :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
+	w, err := watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_file_poll error: %v", err)
 	if err != nil { return }
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	// Allow watcher to take initial snapshot
 	time.sleep(150 * time.Millisecond)
@@ -166,10 +166,10 @@ test_poll_dir_watcher :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_dir_poll(dir, collector_cb, 50 * time.Millisecond)
+	w, err := watch_dir_poll(dir, collector_cb, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_dir_poll error: %v", err)
 	if err != nil { return }
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	time.sleep(150 * time.Millisecond)
 	collector_clear(&c)
@@ -202,10 +202,10 @@ test_poll_recursive_watcher :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_dir_poll_recursive(dir, collector_cb, 50 * time.Millisecond)
+	w, err := watch_dir_poll_recursive(dir, collector_cb, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_dir_poll_recursive error: %v", err)
 	if err != nil { return }
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	time.sleep(150 * time.Millisecond)
 	collector_clear(&c)
@@ -247,10 +247,10 @@ test_inotify_file_watcher :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_file(filepath_a, collector_cb)
+	w, err := watch_file(filepath_a, collector_cb)
 	testing.expectf(t, err == .None, "watch_file error: %v", err)
 	if err != nil { return }
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	time.sleep(100 * time.Millisecond)
 	collector_clear(&c)
@@ -276,10 +276,10 @@ test_inotify_dir_watcher :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_dir(dir, collector_cb)
+	w, err := watch_dir(dir, collector_cb)
 	testing.expectf(t, err == .None, "watch_dir error: %v", err)
 	if err != nil { return }
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	time.sleep(100 * time.Millisecond)
 	collector_clear(&c)
@@ -306,10 +306,10 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_dir_recursive(dir, collector_cb)
+	w, err := watch_dir_recursive(dir, collector_cb)
 	testing.expectf(t, err == .None, "watch_dir_recursive error: %v", err)
 	if err != nil do return
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	time.sleep(100 * time.Millisecond)
 	collector_clear(&c)
@@ -356,10 +356,10 @@ test_glob_watcher :: proc(t: ^testing.T) {
 	context.user_ptr = &c
 
 	pattern := join_path(dir, "*.txt")
-	w, err := fsw.watch_glob(pattern, collector_cb)
+	w, err := watch_glob(pattern, collector_cb)
 	testing.expectf(t, err == .None, "watch_glob error: %v", err)
 	if err != nil { return }
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	time.sleep(200 * time.Millisecond)
 	collector_clear(&c)
@@ -408,10 +408,10 @@ test_stress_many_files :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_dir(dir, collector_cb)
+	w, err := watch_dir(dir, collector_cb)
 	testing.expectf(t, err == .None, "watch_dir error: %v", err)
 	if err != nil { return }
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	time.sleep(100 * time.Millisecond)
 	collector_clear(&c)
@@ -445,10 +445,10 @@ test_stress_rapid_lifecycle :: proc(t: ^testing.T) {
 
 	// Create and destroy 20 watchers rapidly
 	for i in 0..<20 {
-		w, err := fsw.watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
+		w, err := watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
 		testing.expectf(t, err == .None, "rapid lifecycle %d: error %v", i, err)
 		if err != nil { return }
-		fsw.destroy(w)
+		destroy(w)
 	}
 
 	// Final watcher should still work
@@ -456,10 +456,10 @@ test_stress_rapid_lifecycle :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
+	w, err := watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "final watcher error: %v", err)
 	if err != nil { return }
-	defer fsw.destroy(w)
+	defer destroy(w)
 
 	time.sleep(150 * time.Millisecond)
 	collector_clear(&c)
@@ -478,7 +478,7 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "overflow")
 	defer remove_all(dir)
 
-	overflow_cb :: proc(event: ^fsw.Event) {
+	overflow_cb :: proc(event: ^Event) {
 		if event.kind == .Overflow {
 			sync.mutex_lock(&_overflow_mu)
 			_overflow_received = true
@@ -491,10 +491,10 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 	collector_init(&c)
 	context.user_ptr = &c
 
-	w, err := fsw.watch_dir(dir, overflow_cb)
+	w, err := watch_dir(dir, overflow_cb)
 	testing.expectf(t, err == .None, "watch_dir error: %v", err)
-	if err != nil { return }
-	defer fsw.destroy(w)
+	if err != nil do return
+	defer destroy(w)
 
 	time.sleep(100 * time.Millisecond)
 	collector_clear(&c)

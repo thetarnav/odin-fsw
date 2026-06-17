@@ -24,4 +24,4 @@ jobs:
           release: latest
 
       - name: Run Tests
-        run: odin test test
+        run: odin test .

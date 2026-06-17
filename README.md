@@ -2,21 +2,17 @@
 
 Cross-platform file and directory watching library. Uses native backends where available (inotify on Linux, kqueue on macOS/FreeBSD, ReadDirectoryChangesW on Windows) with a polling fallback for all platforms.
 
-## Import
-
-```odin
-import fsw "path/to/fsw"
-```
-
 ## Quick Start
 
 ```odin
-cb :: proc(event: ^fsw.Event) {
+import fsw "odin-fsw"
+
+cb :: proc (event: ^fsw.Event) {
     fmt.printf("%v: %s\n", event.kind, event.path)
 }
 
 w, err := fsw.watch_file("/tmp/test.txt", cb)
-if err != nil { return }
+assert(err == nil)
 defer fsw.destroy(w)
 
 // Watcher runs in a background thread. Events arrive via cb.
