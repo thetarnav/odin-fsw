@@ -33,7 +33,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 		return .Backend_Init_Failed
 	}
 
-	fd := int((^os.File_Impl)(file.impl).fd)
+	fd := int(os.fd(file))
 	ev := kqueue.KEvent{
 		ident  = uintptr(fd),
 		filter = .VNode,
@@ -101,7 +101,7 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 		return .Backend_Init_Failed
 	}
 
-	fd := int((^os.File_Impl)(file.impl).fd)
+	fd := int(os.fd(file))
 	ev := kqueue.KEvent{
 		ident  = uintptr(fd),
 		filter = .VNode,
@@ -200,7 +200,7 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	file, err := os.open(dir, os.O_RDONLY)
 	if err != nil { return }
-	fd := int((^os.File_Impl)(file.impl).fd)
+	fd := int(os.fd(file))
 
 	ev := kqueue.KEvent{
 		ident  = uintptr(fd),
