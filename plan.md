@@ -4,22 +4,17 @@
 
 ```
 fsw/
-  fsw.odin              # public API, types, watcher constructors, `when` dispatch
-  event.odin            # Event type, normalization helpers
-  watch.odin            # recursive state machine (Watcher_Recursive internals)
+  fsw.odin              # public API, types, watcher constructors, procedure groups
+  event.odin            # Event type, Event_Kind, Error, Event_Callback
   snapshot.odin         # polling snapshot logic (File_Info, diff)
   backend_poll.odin     # polling backend (all watcher types)
-  backend_linux.odin    # inotify + epoll
-  backend_windows.odin  # ReadDirectoryChangesW + IOCP
-  backend_darwin.odin   # FSEvents (dirs) + kqueue (files)
-  backend_freebsd.odin  # kqueue
-  backend_posix.odin    # shared POSIX helpers (wake pipe/eventfd, fd utils)
+  backend_linux.odin    # inotify + epoll (Linux only via _linux suffix)
+  backend_windows.odin  # stub (Windows only via _windows suffix)
+  backend_darwin.odin   # stub (macOS only via _darwin suffix)
+  backend_freebsd.odin  # stub (FreeBSD only via _freebsd suffix)
   glob.odin             # Watcher_Glob internals
-  path.odin             # canonicalization, glob prefix extraction
-tests/
-  watch_test.odin       # integration harness (shared mutation script)
-  poll_test.odin        # polling-specific edge cases
-  glob_test.odin        # glob expansion tests
+test/
+  main.odin             # integration tests (24 tests covering all watcher types)
 ```
 
 Package declaration: `package fsw`
@@ -54,56 +49,60 @@ No `Mode`, `Target`, `Target_Kind`, `Config`, or `Backend_Id` types. The watcher
 
 ## Watcher Types
 
-Seven distinct types, each self-contained. All start their backend thread on construction.
+Seven distinct types, each self-contained. All start their backend thread on construction. All heap-allocated via `new()` — constructors return `(^Type, Error)`.
 
 ```odin
-// Single file — native. Zero alloc.
+// Single file — native.
 // inotify: direct watch. kqueue: fd + EVFILT_VNODE. Windows: parent dir + basename filter.
 Watcher_File :: struct {
     callback:      Event_Callback,
-    path:          string,         // borrowed from caller
-    running:       sync.atomic.Bool,
-    native_handle: int,            // inotify wd / kqueue fd / parent dir handle
-    parent_dir:    string,         // Windows only — dir being watched
+    path:          string,         // absolute, resolved at construction
+    running:       bool,
+    native_handle: int,            // inotify fd / kqueue fd / parent dir handle
     thread:        ^thread.Thread,
+    allocator:     mem.Allocator,
 }
 
-// Non-recursive directory — native. Zero alloc.
+// Non-recursive directory — native.
 // Single watch handle on the directory. Reports changes within it.
 Watcher_Dir :: struct {
     callback:      Event_Callback,
     path:          string,
-    running:       sync.atomic.Bool,
+    running:       bool,
     native_handle: int,
     thread:        ^thread.Thread,
+    allocator:     mem.Allocator,
 }
 
 // Recursive directory — native. Allocates map.
 // inotify: watches per subdirectory. Windows/FSEvents: native subtree.
 Watcher_Recursive :: struct {
-    callback:  Event_Callback,
-    path:      string,
-    running:   sync.atomic.Bool,
-    watches:   map[int]string,      // native_handle → subdir path (inotify). Single handle for Windows/FSEvents.
-    thread:    ^thread.Thread,
-    allocator: mem.Allocator,
+    callback:      Event_Callback,
+    path:          string,
+    running:       bool,
+    native_handle: int,
+    watches:       map[int]string,      // native_handle → subdir path (inotify)
+    thread:        ^thread.Thread,
+    user_data:     rawptr,              // used by Watcher_Glob for routing
+    allocator:     mem.Allocator,
 }
 
-// Single file — polling. Inline snapshot, no heap alloc.
+// Single file — polling. Inline snapshot, no heap alloc for snapshot.
 Watcher_File_Poll :: struct {
-    callback: Event_Callback,
-    path:     string,
-    running:  sync.atomic.Bool,
-    latency:  time.Duration,
-    prev:     File_Info,           // previous stat snapshot — inline, no heap
-    thread:   ^thread.Thread,
+    callback:  Event_Callback,
+    path:      string,
+    running:   bool,
+    latency:   time.Duration,
+    prev:      File_Info,           // previous stat snapshot — inline, no heap
+    thread:    ^thread.Thread,
+    allocator: mem.Allocator,
 }
 
 // Non-recursive directory — polling. Allocates file map.
 Watcher_Dir_Poll :: struct {
     callback:  Event_Callback,
     path:      string,
-    running:   sync.atomic.Bool,
+    running:   bool,
     latency:   time.Duration,
     prev:      map[string]File_Info, // filename → last known state
     thread:    ^thread.Thread,
@@ -114,7 +113,7 @@ Watcher_Dir_Poll :: struct {
 Watcher_Recursive_Poll :: struct {
     callback:  Event_Callback,
     path:      string,
-    running:   sync.atomic.Bool,
+    running:   bool,
     latency:   time.Duration,
     prev:      map[string]File_Info,
     thread:    ^thread.Thread,
@@ -123,13 +122,12 @@ Watcher_Recursive_Poll :: struct {
 
 // Glob — watches a directory recursively, filters by glob pattern.
 // Tracks matched files. Reports Added/Removed as files appear/disappear.
-// Allocates for matched_files map and inner recursive watcher.
 Watcher_Glob :: struct {
     callback:      Event_Callback,
-    pattern:       string,              // the glob pattern (e.g. "**/*.odin")
-    running:       sync.atomic.Bool,
+    pattern:       string,              // relative glob pattern (root extracted)
+    running:       bool,
     matched_files: map[string]bool,     // canonical path → currently matched
-    inner:         Watcher_Recursive,   // the underlying recursive watcher
+    inner:         Watcher_Recursive,   // embedded, not separately allocated
     allocator:     mem.Allocator,
 }
 ```
@@ -150,42 +148,50 @@ Watcher :: union {
 }
 ```
 
-Overloaded procs work on both the union and individual types:
+**Odin does not support package-level proc overloading.** Procedure groups are used instead:
 
 ```odin
-// === destroy — overloaded for all types + union ===
+// === destroy — procedure group dispatching to all types + union ===
 
-destroy :: proc(w: ^Watcher_File)           { ... }
-destroy :: proc(w: ^Watcher_Dir)            { ... }
-destroy :: proc(w: ^Watcher_Recursive)      { ... }
-destroy :: proc(w: ^Watcher_File_Poll)      { ... }
-destroy :: proc(w: ^Watcher_Dir_Poll)       { ... }
-destroy :: proc(w: ^Watcher_Recursive_Poll) { ... }
-destroy :: proc(w: ^Watcher_Glob)           { ... }
-destroy :: proc(w: ^Watcher)                { // dispatches to variant }
+destroy_file     :: proc(w: ^Watcher_File)           { ... }
+destroy_dir      :: proc(w: ^Watcher_Dir)            { ... }
+destroy_rec      :: proc(w: ^Watcher_Recursive)      { ... }
+destroy_file_poll :: proc(w: ^Watcher_File_Poll)     { ... }
+destroy_dir_poll  :: proc(w: ^Watcher_Dir_Poll)      { ... }
+destroy_rec_poll  :: proc(w: ^Watcher_Recursive_Poll) { ... }
+destroy_glob     :: proc(w: ^Watcher_Glob)           { ... }
+destroy_watcher  :: proc(w: ^Watcher)                { // dispatches via if-ok chain }
 
-// === rescan — overloaded for types that support it ===
+destroy :: proc {
+    destroy_file, destroy_dir, destroy_rec,
+    destroy_file_poll, destroy_dir_poll, destroy_rec_poll,
+    destroy_glob, destroy_watcher,
+}
 
-rescan :: proc(w: ^Watcher_Recursive)      -> Error { ... }
-rescan :: proc(w: ^Watcher_Recursive_Poll) -> Error { ... }
-rescan :: proc(w: ^Watcher_Glob)           -> Error { ... }
-rescan :: proc(w: ^Watcher)                -> Error { // dispatches }
+// === rescan — procedure group for recursive types + union ===
 
-// === Casting helpers ===
+rescan_rec      :: proc(w: ^Watcher_Recursive)      -> Error { ... }
+rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error { ... }
+rescan_glob     :: proc(w: ^Watcher_Glob)           -> Error { ... }
+rescan_watcher  :: proc(w: ^Watcher)                -> Error { // dispatches }
 
-// Convert any specific watcher pointer to Watcher union
-as_watcher :: proc(w: ^Watcher_File)           -> Watcher { return w }
-as_watcher :: proc(w: ^Watcher_Dir)            -> Watcher { return w }
+rescan :: proc { rescan_rec, rescan_rec_poll, rescan_glob, rescan_watcher }
+
+// === Casting helpers — procedure group ===
+
+as_watcher_file     :: proc(w: ^Watcher_File)           -> Watcher { return w }
+as_watcher_dir      :: proc(w: ^Watcher_Dir)            -> Watcher { return w }
 // ... etc for all types
+
+as_watcher :: proc { as_watcher_file, as_watcher_dir, ... }
 ```
 
 Usage with the union:
 
 ```odin
 // User who doesn't care about specific type
-w: Watcher
-w = as_watcher(watch_file("foo.txt", cb))
-defer destroy(&w)
+w, _ := watch_file("foo.txt", cb)
+defer destroy(w)
 
 // Or store mixed types
 watchers := make([dynamic]Watcher)
@@ -195,37 +201,36 @@ defer for w in watchers { destroy(&w) }
 
 // Specific type usage still works directly
 wf, _ := watch_file("foo.txt", cb)
-defer destroy(&wf)
+defer destroy(wf)
 ```
 
 ## API Surface
 
 ```odin
-// === Constructors — start thread immediately, return running watcher ===
+// === Constructors — start thread immediately, return heap-allocated watcher ===
 
-// File, native. Zero alloc.
-watch_file :: proc(path: string, cb: Event_Callback) -> (Watcher_File, Error)
+// File, native.
+watch_file :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_File, Error)
 
-// File, polling. No heap alloc (inline File_Info snapshot).
-watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration) -> (Watcher_File_Poll, Error)
+// File, polling. Inline File_Info snapshot.
+watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_File_Poll, Error)
 
-// Directory, native, non-recursive. Zero alloc.
-watch_dir :: proc(path: string, cb: Event_Callback) -> (Watcher_Dir, Error)
+// Directory, native, non-recursive.
+watch_dir :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Dir, Error)
 
 // Directory, native, recursive. Allocates watcher map.
-watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (Watcher_Recursive, Error)
+watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Recursive, Error)
 
 // Directory, polling, non-recursive. Allocates file map.
-watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (Watcher_Dir_Poll, Error)
+watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error)
 
 // Directory, polling, recursive. Allocates file map + subdir tracking.
-watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (Watcher_Recursive_Poll, Error)
+watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error)
 
 // Glob — watches directory recursively, filters by pattern. Allocates.
-// Reports Added for new matching files, Removed for deleted matches.
 watch_glob :: proc(pattern: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Glob, Error)
 
-// === Lifecycle (overloaded — see Watcher Union section above) ===
+// === Lifecycle (procedure groups — see Watcher Union section above) ===
 // destroy :: proc(w: ^<any watcher type>)
 // rescan  :: proc(w: ^<recursive watcher type>) -> Error
 
@@ -237,10 +242,9 @@ Event_Callback :: proc(event: ^Event)
 No `run` proc. Watchers are running from the moment they're returned. No `stop` proc — `destroy` stops and frees.
 
 **Allocation rules:**
-- Native watchers (`watch_file`, `watch_dir`): zero heap alloc. Path string borrowed, not copied.
-- Polling file (`watch_file_poll`): no heap alloc. `File_Info` snapshot lives inline in the struct.
-- Polling dir/recursive, native recursive, and glob: allocator required.
-- `watch_glob`: allocator required. Returns `^Watcher_Glob`.
+- All constructors return `(^Type, Error)` — heap-allocated via `new()`.
+- All `destroy` procs call `free(w, w.allocator)` to release memory.
+- `Watcher_Glob.inner` is embedded (not separately allocated); `destroy_glob` cleans it up inline.
 
 ## Glob Watching
 
@@ -249,40 +253,40 @@ No `run` proc. Watchers are running from the moment they're returned. No `stop` 
 **How it works:**
 
 1. Extract watch root from pattern: longest static prefix before first wildcard (`*`, `?`, `{`, `[`).
-   - `src/**/*.odin` → root = `src/`
-   - `*.go` → root = `.`
-   - `**/*.test` → root = `.`
-2. Determine if recursive: pattern contains `**`.
-3. Create `Watcher_Recursive` on the root directory.
-4. Initial glob expansion populates `matched_files`.
-5. Internal callback filters all recursive events through the glob pattern:
-   - New file matches pattern and not in `matched_files` → Added, add to map.
+   - `src/**/*.odin` → root = `src/`, pattern = `**/*.odin`
+   - `*.go` → root = `.`, pattern = `*.go`
+   - `**/*.test` → root = `.`, pattern = `**/*.test`
+2. Create embedded `Watcher_Recursive` on the root directory with `user_data = rawptr(^Watcher_Glob)`.
+3. `glob_initial_scan` walks the tree, populates `matched_files` with files matching the pattern.
+4. The recursive thread checks `user_data` — if non-nil, events are routed through `glob_filter_event` instead of direct callback.
+5. `glob_filter_event` filters events:
+   - New file matches pattern → Added, add to `matched_files`.
    - File in `matched_files` was modified → Modified.
-   - File in `matched_files` was removed → Removed, delete from map.
-   - Directory events that don't match pattern → ignored.
+   - File in `matched_files` was removed → Removed, delete from `matched_files`.
+   - Non-matching files → ignored.
 
 **Pattern matching**: paths are stored canonical, relative to watch root. Pattern is matched against relative path using `path.match`.
 
 **Example:**
 ```odin
 w, err := watch_glob("src/**/*.odin", on_change)
-defer destroy(&w)
+defer destroy(w)
 // Reports Added when new .odin file appears anywhere under src/
 // Reports Removed when .odin file is deleted
 // Reports Modified when .odin file content changes
 // Ignores non-.odin files, even though they're watched internally
 ```
 
-**rescan**: re-expands glob, diffs against `matched_files`, emits Added/Removed for changes. Delegates to inner `Watcher_Recursive.rescan` for backend state.
+**rescan**: re-expands glob, diffs against `matched_files`, emits Added/Removed for changes. Delegates to inner `Watcher_Recursive`'s `backend_rec_rescan` for watch state rebuild.
 
 ## Backend Interface
 
-Each backend is a set of procs, selected at compile-time via `when ODIN_OS`. Each watcher type has its own backend procs:
+Each backend is a set of procs, defined in platform-specific files. Odin's `_os` file suffix convention ensures each file only compiles on its target platform (e.g., `backend_linux.odin` only compiles on Linux).
 
 ```odin
 // Native file watcher
 backend_file_init    :: proc(w: ^Watcher_File) -> Error        // open handle, start thread
-backend_file_destroy :: proc(w: ^Watcher_File)                  // close handle, join thread
+backend_file_destroy :: proc(w: ^Watcher_File)                 // close handle, join thread
 
 // Native dir watcher
 backend_dir_init     :: proc(w: ^Watcher_Dir) -> Error
@@ -291,14 +295,10 @@ backend_dir_destroy  :: proc(w: ^Watcher_Dir)
 // Native recursive watcher
 backend_rec_init     :: proc(w: ^Watcher_Recursive) -> Error
 backend_rec_destroy  :: proc(w: ^Watcher_Recursive)
-
-// Polling variants share snapshot logic, just differ in event loop
-backend_poll_file_run  :: proc(w: ^Watcher_File_Poll)          // stat loop
-backend_poll_dir_run   :: proc(w: ^Watcher_Dir_Poll)           // readdir + diff loop
-backend_poll_rec_run   :: proc(w: ^Watcher_Recursive_Poll)     // recursive walk + diff loop
+backend_rec_rescan   :: proc(w: ^Watcher_Recursive) -> Error   // rebuild watch state
 ```
 
-No vtable. `when` dispatch at each constructor and destroy call site.
+No vtable. Platform selection via file suffix convention (`_linux`, `_windows`, `_darwin`, `_freebsd`). Each platform file must define all backend procs; stubs return `Backend_Init_Failed`.
 
 ## Event Delivery
 
@@ -396,32 +396,31 @@ Windows `Watcher_File` stores `parent_dir` (the dir handle) and `path` (the targ
 
 ```odin
 File_Info :: struct {
-    path:   string,
-    is_dir: bool,
-    size:   i64,
+    size:   i64,         // -1 sentinel for deleted files
     mtime:  time.Time,
-    inode:  u64,         // 0 on Windows (use file index)
+    inode:  u128,
 }
 ```
 
 - `Watcher_File_Poll.prev`: single `File_Info` inline in struct. No heap.
 - `Watcher_Dir_Poll.prev`: `map[string]File_Info` keyed by filename. Heap allocated.
 - `Watcher_Recursive_Poll.prev`: `map[string]File_Info` keyed by canonical path. Heap allocated.
-- Use `os.stat` for metadata. Use `os.read_directory` for dir enumeration.
+- Use `os.stat` for metadata. Use `os.read_all_directory_by_path` for dir enumeration.
+- Polling file delete detection: `prev.size < 0` sentinel tracks deleted state. Reports `.Removed` on stat failure, `.Added` when file reappears.
 
 ## Error Handling
 
-- All constructors return `Error`.
-- `Error.Backend_Init_Failed` is fatal — watcher is not usable, do not call `destroy`.
-- Per-event errors (stat failure, permission denied) logged to `log.err`, do not stop the watcher.
+- All constructors return `(^Type, Error)`.
+- `Error.Backend_Init_Failed` is fatal — watcher is not usable, `nil` is returned. Do not call `destroy`.
+- Per-event errors (stat failure, permission denied) are handled internally — the watcher continues running.
 - Overflow is delivered as an `Event_Kind.Overflow` event, not an error.
 
 ## Thread Safety
 
-- Each watcher owns one backend thread (started at construction). `Watcher_Glob` shares the inner `Watcher_Recursive`'s thread.
-- `destroy` is safe to call from any thread (sets atomic flag, joins thread).
+- Each watcher owns one backend thread (started at construction). `Watcher_Glob` shares the inner `Watcher_Recursive`'s thread via `user_data` routing.
+- `destroy` is safe to call from any thread — sets `running = false`, joins thread, frees memory.
 - Callback is invoked from the backend thread. User must synchronize if forwarding to other threads.
-- `rescan` sets a flag; safe to call from callback. Rescan runs on the next loop iteration.
+- `rescan` rebuilds watch state synchronously. Safe to call from any thread.
 - Watchers are independent — no shared state between them.
 
 ## Testing Plan
@@ -472,26 +471,28 @@ Assertions: final filesystem state correct. Event set is a superset of expected 
 
 ## Implementation Order
 
-1. **Core types** (`fsw.odin`, `event.odin`) — Event, Error, Event_Kind, Event_Callback, Watcher union.
-2. **Polling file watcher** (`backend_poll.odin`, `snapshot.odin`) — `Watcher_File_Poll`, `watch_file_poll`, `destroy`. First working watcher.
-3. **Polling dir watchers** — `Watcher_Dir_Poll`, `Watcher_Recursive_Poll`. `snapshot.odin` diff logic.
-4. **Integration test harness** — mutation script against all polling watchers.
-5. **Linux/inotify file watcher** (`backend_linux.odin`) — `Watcher_File`, `watch_file`.
-6. **Linux/inotify dir watchers** — `Watcher_Dir`, `Watcher_Recursive` with subdir state machine.
-7. **Glob watcher** (`glob.odin`) — `Watcher_Glob`, `watch_glob`, pattern matching, matched_files tracking.
-8. **Windows backend** (`backend_windows.odin`) — IOCP + ReadDirectoryChangesW for all types.
-9. **macOS backend** (`backend_darwin.odin`) — FSEvents for recursive, kqueue for file.
-10. **FreeBSD backend** (`backend_freebsd.odin`) — kqueue.
-11. **Recovery hardening** — test overflow/invalidation on all backends.
+1. **Core types** (`fsw.odin`, `event.odin`) — Event, Error, Event_Kind, Event_Callback, Watcher union. ✅
+2. **Polling file watcher** (`backend_poll.odin`, `snapshot.odin`) — `Watcher_File_Poll`, `watch_file_poll`, `destroy`. First working watcher. ✅
+3. **Polling dir watchers** — `Watcher_Dir_Poll`, `Watcher_Recursive_Poll`. `snapshot.odin` diff logic. ✅
+4. **Integration test harness** (`test/main.odin`) — mutation script against all polling watchers. ✅
+5. **Linux/inotify file watcher** (`backend_linux.odin`) — `Watcher_File`, `watch_file`. ✅
+6. **Linux/inotify dir watchers** — `Watcher_Dir`, `Watcher_Recursive` with subdir state machine. ✅
+7. **Glob watcher** (`glob.odin`) — `Watcher_Glob`, `watch_glob`, pattern matching, matched_files tracking. ✅
+8. **OS backend stubs** — `backend_windows.odin`, `backend_darwin.odin`, `backend_freebsd.odin`. ✅
+9. **Glob integration tests** — matching/non-matching file events. ✅
+10. **Recovery hardening** — stress tests (many files, rapid lifecycle, overflow tracking). ✅
+11. **Windows backend** (`backend_windows.odin`) — IOCP + ReadDirectoryChangesW for all types. 🔲
+12. **macOS backend** (`backend_darwin.odin`) — FSEvents for recursive, kqueue for file. 🔲
+13. **FreeBSD backend** (`backend_freebsd.odin`) — kqueue. 🔲
 
 ## Design Constraints
 
-- No dynamic backend switching. Backend is compile-time per OS.
+- No dynamic backend switching. Backend is compile-time per OS via `_os` file suffix convention.
 - No Config struct. Parameters are inline in constructor calls with sensible defaults.
 - No add/remove targets. One watcher = one target. Compose by creating multiple watchers.
 - No batching. Per-event callback. Backend iterates and calls for each event.
 - No event filtering in the core. User filters in their callback. (Glob watcher is an exception — it filters by pattern internally.)
 - No debouncing in the core.
 - Paths are canonical (absolute, cleaned). Resolved at construction.
-- Native watchers borrow the path string (zero alloc). Polling/dir watchers copy via allocator.
-- No dependencies outside `core` (os, path/filepath, sys, mem, sync, time, fmt).
+- All constructors heap-allocate (`new()`). All `destroy` procs free memory.
+- No dependencies outside `core` (os, path/filepath, sys/linux, mem, sync, time, fmt, strings, thread).
