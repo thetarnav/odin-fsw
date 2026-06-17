@@ -503,6 +503,92 @@ test_inotify_recursive_watcher :: proc() {
 	}
 }
 
+test_glob_watcher :: proc() {
+	fmt.println("[test] glob watcher")
+
+	dir, ok := make_temp_dir("glob")
+	if !ok { test_fail("setup", "cannot create temp dir"); return }
+	defer remove_all(dir)
+
+	// Create a file that matches *.txt BEFORE watcher starts (initial scan)
+	pre_existing := join_path(dir, "pre.txt")
+	write_file(pre_existing, "existing")
+
+	c: Collector
+	collector_init(&c)
+	defer collector_destroy(&c)
+	_collector = &c
+
+	pattern := join_path(dir, "*.txt")
+	w, err := fsw.watch_glob(pattern, collector_cb)
+	if err != .None {
+		test_fail("create watcher", fmt.tprintf("error: %v", err))
+		return
+	}
+	defer fsw.destroy(w)
+
+	time.sleep(200 * time.Millisecond)
+	collector_clear(&c)
+
+	// 1. Create a new .txt file (should match)
+	new_txt := join_path(dir, "new.txt")
+	write_file(new_txt, "hello")
+	if collector_wait(&c, 1, 2 * time.Second) {
+		if collector_has_kind_path(&c, .Added, "new.txt") {
+			test_pass("matching file create detected")
+		} else {
+			test_fail("matching file create", fmt.tprintf("got: %v", c.events))
+		}
+	} else {
+		test_fail("matching file create", "timeout")
+	}
+	collector_clear(&c)
+
+	// 2. Create a .log file (should NOT match *.txt)
+	new_log := join_path(dir, "test.log")
+	write_file(new_log, "log data")
+	time.sleep(300 * time.Millisecond)
+	sync.mutex_lock(&c.mu)
+	log_count := 0
+	for ev in c.events {
+		if strings.contains(ev.path, ".log") {
+			log_count += 1
+		}
+	}
+	sync.mutex_unlock(&c.mu)
+	if log_count == 0 {
+		test_pass("non-matching file ignored")
+	} else {
+		test_fail("non-matching file ignored", fmt.tprintf("got %d .log events", log_count))
+	}
+	collector_clear(&c)
+
+	// 3. Modify the .txt file (should match)
+	write_file(new_txt, "modified")
+	if collector_wait(&c, 1, 2 * time.Second) {
+		if collector_has_kind_path(&c, .Modified, "new.txt") {
+			test_pass("matching file modify detected")
+		} else {
+			test_fail("matching file modify", fmt.tprintf("got: %v", c.events))
+		}
+	} else {
+		test_fail("matching file modify", "timeout")
+	}
+	collector_clear(&c)
+
+	// 4. Delete the .txt file (should match)
+	os.remove(new_txt)
+	if collector_wait(&c, 1, 2 * time.Second) {
+		if collector_has_kind_path(&c, .Removed, "new.txt") {
+			test_pass("matching file delete detected")
+		} else {
+			test_fail("matching file delete", fmt.tprintf("got: %v", c.events))
+		}
+	} else {
+		test_fail("matching file delete", "timeout")
+	}
+}
+
 // === Main ===
 
 main :: proc() {
@@ -515,6 +601,7 @@ main :: proc() {
 	test_inotify_file_watcher()
 	test_inotify_dir_watcher()
 	test_inotify_recursive_watcher()
+	test_glob_watcher()
 
 	fmt.println()
 	fmt.println("=== tests complete ===")
