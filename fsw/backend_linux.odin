@@ -12,8 +12,8 @@ INOTIFY_MASK :: linux.Inotify_Event_Mask{
 	.DELETE_SELF, .MOVE_SELF, .CLOSE_WRITE, .ISDIR,
 }
 
-to_cstring :: proc(s: string) -> cstring {
-	buf := make([]byte, len(s) + 1, context.temp_allocator)
+to_cstring :: proc(s: string, allocator := context.temp_allocator) -> cstring {
+	buf := make([]byte, len(s) + 1, allocator)
 	copy(buf, s)
 	buf[len(s)] = 0
 	return cstring(&buf[0])
@@ -30,10 +30,10 @@ inotify_normalize :: proc(mask: linux.Inotify_Event_Mask) -> Event_Kind {
 	return .Modified
 }
 
-inotify_event_name :: proc(event: ^linux.Inotify_Event) -> string {
+inotify_event_name :: proc(event: ^linux.Inotify_Event, allocator := context.temp_allocator) -> string {
 	if event.len == 0 { return "" }
 	name_ptr := rawptr(uintptr(&event^) + size_of(linux.Inotify_Event))
-	return strings.clone_from_cstring(cstring(name_ptr), context.temp_allocator)
+	return strings.clone_from_cstring(cstring(name_ptr), allocator)
 }
 
 // === Watcher_File ===
@@ -88,7 +88,7 @@ inotify_file_thread :: proc(t: ^thread.Thread) {
 				kind := inotify_normalize(event.mask)
 				path := w.path
 				if name != "" {
-					joined, _ := filepath.join({w.path, name})
+					joined, _ := filepath.join({w.path, name}, context.temp_allocator)
 					path = joined
 				}
 				e := Event{
@@ -155,7 +155,7 @@ inotify_dir_thread :: proc(t: ^thread.Thread) {
 				kind := inotify_normalize(event.mask)
 				path := w.path
 				if name != "" {
-					joined, _ := filepath.join({w.path, name})
+					joined, _ := filepath.join({w.path, name}, context.temp_allocator)
 					path = joined
 				}
 				e := Event{
@@ -249,7 +249,7 @@ inotify_rec_thread :: proc(t: ^thread.Thread) {
 				kind := inotify_normalize(event.mask)
 				path := dir_path
 				if name != "" {
-					joined, _ := filepath.join({dir_path, name})
+					joined, _ := filepath.join({dir_path, name}, context.temp_allocator)
 					path = joined
 				}
 				is_dir := .ISDIR in event.mask

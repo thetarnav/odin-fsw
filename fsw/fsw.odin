@@ -97,7 +97,7 @@ Watcher :: union {
 // === Constructors — all heap-allocate, return pointers ===
 
 watch_file :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_File, Error) {
-	p, err := filepath.abs(path)
+	p, err := filepath.abs(path, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
 	}
@@ -120,7 +120,7 @@ watch_file :: proc(path: string, cb: Event_Callback, allocator := context.alloca
 }
 
 watch_dir :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Dir, Error) {
-	p, err := filepath.abs(path)
+	p, err := filepath.abs(path, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
 	}
@@ -143,7 +143,7 @@ watch_dir :: proc(path: string, cb: Event_Callback, allocator := context.allocat
 }
 
 watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
-	p, err := filepath.abs(path)
+	p, err := filepath.abs(path, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
 	}
@@ -166,7 +166,7 @@ watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := conte
 }
 
 watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
-	p, err := filepath.abs(path)
+	p, err := filepath.abs(path, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
 	}
@@ -191,7 +191,7 @@ watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration
 }
 
 watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
-	p, err := filepath.abs(path)
+	p, err := filepath.abs(path, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
 	}
@@ -214,7 +214,7 @@ watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration,
 }
 
 watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error) {
-	p, err := filepath.abs(path)
+	p, err := filepath.abs(path, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
 	}
@@ -238,7 +238,7 @@ watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time
 
 watch_glob :: proc(pattern: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Glob, Error) {
 	root, pat := glob_extract_root(pattern)
-	p, err := filepath.abs(root)
+	p, err := filepath.abs(root, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
 	}
@@ -274,6 +274,7 @@ destroy_file :: proc(w: ^Watcher_File) {
 	if w == nil || !w.running { return }
 	w.running = false
 	backend_file_destroy(w)
+	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
 
@@ -281,6 +282,7 @@ destroy_dir :: proc(w: ^Watcher_Dir) {
 	if w == nil || !w.running { return }
 	w.running = false
 	backend_dir_destroy(w)
+	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
 
@@ -288,7 +290,11 @@ destroy_rec :: proc(w: ^Watcher_Recursive) {
 	if w == nil || !w.running { return }
 	w.running = false
 	backend_rec_destroy(w)
+	for _, v in w.watches {
+		delete(v, w.allocator)
+	}
 	delete(w.watches)
+	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
 
@@ -299,6 +305,7 @@ destroy_file_poll :: proc(w: ^Watcher_File_Poll) {
 		thread.join(w.thread)
 		thread.destroy(w.thread)
 	}
+	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
 
@@ -310,6 +317,7 @@ destroy_dir_poll :: proc(w: ^Watcher_Dir_Poll) {
 		thread.destroy(w.thread)
 	}
 	delete(w.prev)
+	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
 
@@ -321,17 +329,25 @@ destroy_rec_poll :: proc(w: ^Watcher_Recursive_Poll) {
 		thread.destroy(w.thread)
 	}
 	delete(w.prev)
+	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
 
 destroy_glob :: proc(w: ^Watcher_Glob) {
 	if w == nil || !w.running { return }
 	w.running = false
-	// Clean up inner watcher directly (it's embedded, not separately allocated)
 	w.inner.running = false
 	backend_rec_destroy(&w.inner)
+	for _, v in w.inner.watches {
+		delete(v, w.allocator)
+	}
 	delete(w.inner.watches)
+	for path in w.matched_files {
+		delete(path, w.allocator)
+	}
 	delete(w.matched_files)
+	delete(w.inner.path, w.allocator)
+	delete(w.pattern, w.allocator)
 	free(w, w.allocator)
 }
 

@@ -1,10 +1,12 @@
 package test_fsw
 
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:sync"
+import "core:testing"
 import "core:time"
 import "../fsw"
 
@@ -16,17 +18,19 @@ Collected_Event :: struct {
 }
 
 Collector :: struct {
-	mu:     sync.Mutex,
-	events: [dynamic]Collected_Event,
+	mu:        sync.Mutex,
+	events:    [dynamic]Collected_Event,
+	allocator: mem.Allocator,
 }
 
-collector_init :: proc(c: ^Collector) {
-	c.events = make([dynamic]Collected_Event, 0, 64)
+collector_init :: proc(c: ^Collector, allocator := context.allocator) {
+	c.allocator = allocator
+	c.events = make([dynamic]Collected_Event, 0, 64, allocator)
 }
 
 collector_destroy :: proc(c: ^Collector) {
 	for ev in c.events {
-		delete(ev.path)
+		delete(ev.path, c.allocator)
 	}
 	delete(c.events)
 }
@@ -34,7 +38,7 @@ collector_destroy :: proc(c: ^Collector) {
 collector_cb :: proc(event: ^fsw.Event) {
 	if _collector == nil { return }
 	sync.mutex_lock(&_collector.mu)
-	path_copy := strings.clone(event.path)
+	path_copy := strings.clone(event.path, _collector.allocator)
 	append(&_collector.events, Collected_Event{event.kind, path_copy})
 	sync.mutex_unlock(&_collector.mu)
 }
@@ -42,7 +46,7 @@ collector_cb :: proc(event: ^fsw.Event) {
 collector_clear :: proc(c: ^Collector) {
 	sync.mutex_lock(&c.mu)
 	for ev in c.events {
-		delete(ev.path)
+		delete(ev.path, c.allocator)
 	}
 	clear(&c.events)
 	sync.mutex_unlock(&c.mu)
@@ -88,25 +92,19 @@ collector_count_kind :: proc(c: ^Collector, kind: fsw.Event_Kind) -> int {
 // Global collector pointer (test funcs set this before creating watchers)
 _collector: ^Collector
 
-// Overflow tracking globals (used by test_overflow_tracking)
-_overflow_received: bool
-_overflow_mu: sync.Mutex
-
 // === Test helpers ===
 
 join_path :: proc(a: string, b: string) -> string {
-	s, _ := filepath.join({a, b})
+	s, _ := filepath.join({a, b}, context.temp_allocator)
 	return s
 }
 
-make_temp_dir :: proc(prefix: string) -> (string, bool) {
+make_temp_dir :: proc(t: ^testing.T, prefix: string) -> string {
 	name := fmt.tprintf("fsw_test_{}_{}", prefix, time.time_to_unix(time.now()))
 	dir := join_path("/tmp", name)
 	err := os.mkdir(dir)
-	if err != nil {
-		return "", false
-	}
-	return dir, true
+	testing.expectf(t, err == nil, "cannot create temp dir %s: %v", dir, err)
+	return dir
 }
 
 remove_all :: proc(dir: string) {
@@ -135,21 +133,11 @@ touch_file :: proc(path: string) {
 	write_file(path, "hello")
 }
 
-test_pass :: proc(name: string) {
-	fmt.printf("  PASS: %s\n", name)
-}
-
-test_fail :: proc(name: string, msg: string) {
-	fmt.printf("  FAIL: %s — %s\n", name, msg)
-}
-
 // === Tests ===
 
-test_poll_file_watcher :: proc() {
-	fmt.println("[test] polling file watcher")
-
-	dir, ok := make_temp_dir("poll_file")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_poll_file_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "poll_file")
 	defer remove_all(dir)
 
 	filepath_a := join_path(dir, "a.txt")
@@ -161,10 +149,8 @@ test_poll_file_watcher :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_file_poll error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	// Allow watcher to take initial snapshot
@@ -173,35 +159,19 @@ test_poll_file_watcher :: proc() {
 
 	// 1. Modify file
 	write_file(filepath_a, "modified content")
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Modified, "a.txt") {
-			test_pass("modify detected")
-		} else {
-			test_fail("modify detected", "no Modified event")
-		}
-	} else {
-		test_fail("modify detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "modify: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Modified, "a.txt"), "modify: no Modified event")
 	collector_clear(&c)
 
 	// 2. Delete file
 	os.remove(filepath_a)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Removed, "a.txt") {
-			test_pass("delete detected")
-		} else {
-			test_fail("delete detected", "no Removed event")
-		}
-	} else {
-		test_fail("delete detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "delete: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Removed, "a.txt"), "delete: no Removed event")
 }
 
-test_poll_dir_watcher :: proc() {
-	fmt.println("[test] polling dir watcher")
-
-	dir, ok := make_temp_dir("poll_dir")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_poll_dir_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "poll_dir")
 	defer remove_all(dir)
 
 	c: Collector
@@ -210,10 +180,8 @@ test_poll_dir_watcher :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_dir_poll(dir, collector_cb, 50 * time.Millisecond)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_dir_poll error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(150 * time.Millisecond)
@@ -222,48 +190,25 @@ test_poll_dir_watcher :: proc() {
 	// 1. Create file
 	file_a := join_path(dir, "new.txt")
 	touch_file(file_a)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Added, "new.txt") {
-			test_pass("file create detected")
-		} else {
-			test_fail("file create detected", "no Added event")
-		}
-	} else {
-		test_fail("file create detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "create: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "new.txt"), "create: no Added event")
 	collector_clear(&c)
 
 	// 2. Modify file
 	write_file(file_a, "changed")
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Modified, "new.txt") {
-			test_pass("file modify detected")
-		} else {
-			test_fail("file modify detected", "no Modified event")
-		}
-	} else {
-		test_fail("file modify detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "modify: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Modified, "new.txt"), "modify: no Modified event")
 	collector_clear(&c)
 
 	// 3. Delete file
 	os.remove(file_a)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Removed, "new.txt") {
-			test_pass("file delete detected")
-		} else {
-			test_fail("file delete detected", "no Removed event")
-		}
-	} else {
-		test_fail("file delete detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "delete: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Removed, "new.txt"), "delete: no Removed event")
 }
 
-test_poll_recursive_watcher :: proc() {
-	fmt.println("[test] polling recursive watcher")
-
-	dir, ok := make_temp_dir("poll_rec")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_poll_recursive_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "poll_rec")
 	defer remove_all(dir)
 
 	c: Collector
@@ -272,10 +217,8 @@ test_poll_recursive_watcher :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_dir_poll_recursive(dir, collector_cb, 50 * time.Millisecond)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_dir_poll_recursive error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(150 * time.Millisecond)
@@ -289,53 +232,26 @@ test_poll_recursive_watcher :: proc() {
 	nested_file := join_path(subdir, "deep.txt")
 	touch_file(nested_file)
 
-	if collector_wait(&c, 2, 3 * time.Second) {
-		if collector_has_kind_path(&c, .Added, "sub") {
-			test_pass("subdir create detected")
-		} else {
-			test_fail("subdir create detected", "no Added event for sub")
-		}
-		if collector_has_kind_path(&c, .Added, "deep.txt") {
-			test_pass("nested file create detected")
-		} else {
-			test_fail("nested file create detected", "no Added event for deep.txt")
-		}
-	} else {
-		test_fail("recursive create", fmt.tprintf("timeout, got %d events", len(c.events)))
-	}
+	testing.expect(t, collector_wait(&c, 2, 3 * time.Second), "recursive create: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "sub"), "subdir create: no Added event")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "deep.txt"), "nested file create: no Added event")
 	collector_clear(&c)
 
 	// 2. Modify nested file
 	write_file(nested_file, "updated deep content")
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Modified, "deep.txt") {
-			test_pass("nested file modify detected")
-		} else {
-			test_fail("nested file modify detected", "no Modified event")
-		}
-	} else {
-		test_fail("nested file modify", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested modify: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Modified, "deep.txt"), "nested modify: no Modified event")
 	collector_clear(&c)
 
 	// 3. Delete nested file
 	os.remove(nested_file)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Removed, "deep.txt") {
-			test_pass("nested file delete detected")
-		} else {
-			test_fail("nested file delete detected", "no Removed event")
-		}
-	} else {
-		test_fail("nested file delete", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested delete: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Removed, "deep.txt"), "nested delete: no Removed event")
 }
 
-test_inotify_file_watcher :: proc() {
-	fmt.println("[test] inotify file watcher")
-
-	dir, ok := make_temp_dir("inotify_file")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_inotify_file_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "inotify_file")
 	defer remove_all(dir)
 
 	filepath_a := join_path(dir, "a.txt")
@@ -347,10 +263,8 @@ test_inotify_file_watcher :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_file(filepath_a, collector_cb)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_file error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(100 * time.Millisecond)
@@ -358,35 +272,19 @@ test_inotify_file_watcher :: proc() {
 
 	// 1. Modify file
 	write_file(filepath_a, "modified inotify")
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Modified, "a.txt") {
-			test_pass("modify detected")
-		} else {
-			test_fail("modify detected", fmt.tprintf("got events but no Modified"))
-		}
-	} else {
-		test_fail("modify detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "modify: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Modified, "a.txt"), "modify: no Modified event")
 	collector_clear(&c)
 
 	// 2. Delete file
 	os.remove(filepath_a)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Removed, "a.txt") {
-			test_pass("delete detected")
-		} else {
-			test_fail("delete detected", fmt.tprintf("got events but no Removed"))
-		}
-	} else {
-		test_fail("delete detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "delete: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Removed, "a.txt"), "delete: no Removed event")
 }
 
-test_inotify_dir_watcher :: proc() {
-	fmt.println("[test] inotify dir watcher")
-
-	dir, ok := make_temp_dir("inotify_dir")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_inotify_dir_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "inotify_dir")
 	defer remove_all(dir)
 
 	c: Collector
@@ -395,10 +293,8 @@ test_inotify_dir_watcher :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_dir(dir, collector_cb)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_dir error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(100 * time.Millisecond)
@@ -407,35 +303,19 @@ test_inotify_dir_watcher :: proc() {
 	// 1. Create file
 	file_a := join_path(dir, "test.txt")
 	touch_file(file_a)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Added, "test.txt") {
-			test_pass("file create detected")
-		} else {
-			test_fail("file create detected", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("file create detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "create: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "test.txt"), "create: no Added event")
 	collector_clear(&c)
 
 	// 2. Delete file
 	os.remove(file_a)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Removed, "test.txt") {
-			test_pass("file delete detected")
-		} else {
-			test_fail("file delete detected", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("file delete detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "delete: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Removed, "test.txt"), "delete: no Removed event")
 }
 
-test_inotify_recursive_watcher :: proc() {
-	fmt.println("[test] inotify recursive watcher")
-
-	dir, ok := make_temp_dir("inotify_rec")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_inotify_recursive_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "inotify_rec")
 	defer remove_all(dir)
 
 	c: Collector
@@ -444,10 +324,8 @@ test_inotify_recursive_watcher :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_dir_recursive(dir, collector_cb)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_dir_recursive error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(100 * time.Millisecond)
@@ -456,62 +334,32 @@ test_inotify_recursive_watcher :: proc() {
 	// 1. Create subdir
 	subdir := join_path(dir, "sub")
 	os.mkdir(subdir)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Added, "sub") {
-			test_pass("subdir create detected")
-		} else {
-			test_fail("subdir create detected", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("subdir create detected", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "subdir create: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "sub"), "subdir create: no Added event")
 	collector_clear(&c)
 
 	// 2. Create file in subdir (auto-watched by recursive)
 	nested := join_path(subdir, "nested.txt")
 	touch_file(nested)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Added, "nested.txt") {
-			test_pass("nested file create detected")
-		} else {
-			test_fail("nested file create detected", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("nested file create", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested create: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "nested.txt"), "nested create: no Added event")
 	collector_clear(&c)
 
 	// 3. Modify nested file
 	write_file(nested, "updated")
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Modified, "nested.txt") {
-			test_pass("nested file modify detected")
-		} else {
-			test_fail("nested file modify detected", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("nested file modify", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested modify: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Modified, "nested.txt"), "nested modify: no Modified event")
 	collector_clear(&c)
 
 	// 4. Delete nested file
 	os.remove(nested)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Removed, "nested.txt") {
-			test_pass("nested file delete detected")
-		} else {
-			test_fail("nested file delete detected", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("nested file delete", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested delete: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Removed, "nested.txt"), "nested delete: no Removed event")
 }
 
-test_glob_watcher :: proc() {
-	fmt.println("[test] glob watcher")
-
-	dir, ok := make_temp_dir("glob")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_glob_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "glob")
 	defer remove_all(dir)
 
 	// Create a file that matches *.txt BEFORE watcher starts (initial scan)
@@ -525,10 +373,8 @@ test_glob_watcher :: proc() {
 
 	pattern := join_path(dir, "*.txt")
 	w, err := fsw.watch_glob(pattern, collector_cb)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_glob error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(200 * time.Millisecond)
@@ -537,15 +383,8 @@ test_glob_watcher :: proc() {
 	// 1. Create a new .txt file (should match)
 	new_txt := join_path(dir, "new.txt")
 	write_file(new_txt, "hello")
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Added, "new.txt") {
-			test_pass("matching file create detected")
-		} else {
-			test_fail("matching file create", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("matching file create", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching create: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "new.txt"), "matching create: no Added event")
 	collector_clear(&c)
 
 	// 2. Create a .log file (should NOT match *.txt)
@@ -560,44 +399,24 @@ test_glob_watcher :: proc() {
 		}
 	}
 	sync.mutex_unlock(&c.mu)
-	if log_count == 0 {
-		test_pass("non-matching file ignored")
-	} else {
-		test_fail("non-matching file ignored", fmt.tprintf("got %d .log events", log_count))
-	}
+	testing.expect_value(t, log_count, 0)
 	collector_clear(&c)
 
 	// 3. Modify the .txt file (should match)
 	write_file(new_txt, "modified")
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Modified, "new.txt") {
-			test_pass("matching file modify detected")
-		} else {
-			test_fail("matching file modify", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("matching file modify", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching modify: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Modified, "new.txt"), "matching modify: no Modified event")
 	collector_clear(&c)
 
 	// 4. Delete the .txt file (should match)
 	os.remove(new_txt)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Removed, "new.txt") {
-			test_pass("matching file delete detected")
-		} else {
-			test_fail("matching file delete", fmt.tprintf("got: %v", c.events))
-		}
-	} else {
-		test_fail("matching file delete", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching delete: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Removed, "new.txt"), "matching delete: no Removed event")
 }
 
-test_stress_many_files :: proc() {
-	fmt.println("[test] stress: many files rapidly")
-
-	dir, ok := make_temp_dir("stress_many")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_stress_many_files :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "stress_many")
 	defer remove_all(dir)
 
 	c: Collector
@@ -606,10 +425,8 @@ test_stress_many_files :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_dir(dir, collector_cb)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_dir error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(100 * time.Millisecond)
@@ -629,22 +446,13 @@ test_stress_many_files :: proc() {
 	probe := join_path(dir, "PROBE_AFTER_STRESS.txt")
 	collector_clear(&c)
 	touch_file(probe)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Added, "PROBE_AFTER_STRESS") {
-			test_pass("watcher alive after stress")
-		} else {
-			test_fail("watcher alive after stress", "probe not detected")
-		}
-	} else {
-		test_fail("watcher alive after stress", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "post-stress probe: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "PROBE_AFTER_STRESS"), "post-stress probe: not detected")
 }
 
-test_stress_rapid_lifecycle :: proc() {
-	fmt.println("[test] stress: rapid watcher create/destroy")
-
-	dir, ok := make_temp_dir("stress_lifecycle")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_stress_rapid_lifecycle :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "stress_lifecycle")
 	defer remove_all(dir)
 
 	filepath_a := join_path(dir, "lifecycle.txt")
@@ -653,10 +461,8 @@ test_stress_rapid_lifecycle :: proc() {
 	// Create and destroy 20 watchers rapidly
 	for i in 0..<20 {
 		w, err := fsw.watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
-		if err != .None {
-			test_fail("rapid lifecycle", fmt.tprintf("iteration %d: error %v", i, err))
-			return
-		}
+		testing.expectf(t, err == .None, "rapid lifecycle %d: error %v", i, err)
+		if err != nil { return }
 		fsw.destroy(w)
 	}
 
@@ -667,32 +473,25 @@ test_stress_rapid_lifecycle :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
-	if err != .None {
-		test_fail("final watcher create", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "final watcher error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(150 * time.Millisecond)
 	collector_clear(&c)
 
 	write_file(filepath_a, "after rapid lifecycle")
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Modified, "lifecycle.txt") {
-			test_pass("watcher works after rapid lifecycle")
-		} else {
-			test_fail("final modify", "no Modified event")
-		}
-	} else {
-		test_fail("final modify", "timeout")
-	}
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "final modify: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Modified, "lifecycle.txt"), "final modify: no Modified event")
 }
 
-test_overflow_tracking :: proc() {
-	fmt.println("[test] overflow event tracking")
+// Overflow tracking globals
+_overflow_received: bool
+_overflow_mu: sync.Mutex
 
-	dir, ok := make_temp_dir("overflow")
-	if !ok { test_fail("setup", "cannot create temp dir"); return }
+@(test)
+test_overflow_tracking :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "overflow")
 	defer remove_all(dir)
 
 	overflow_cb :: proc(event: ^fsw.Event) {
@@ -710,17 +509,14 @@ test_overflow_tracking :: proc() {
 	_collector = &c
 
 	w, err := fsw.watch_dir(dir, overflow_cb)
-	if err != .None {
-		test_fail("create watcher", fmt.tprintf("error: %v", err))
-		return
-	}
+	testing.expectf(t, err == .None, "watch_dir error: %v", err)
+	if err != nil { return }
 	defer fsw.destroy(w)
 
 	time.sleep(100 * time.Millisecond)
 	collector_clear(&c)
 
 	// Create many files rapidly to try to trigger overflow
-	// (may not actually overflow on modern kernels with large buffers)
 	for i in 0..<200 {
 		name := fmt.tprintf("ovf_{}.txt", i)
 		path := join_path(dir, name)
@@ -734,11 +530,9 @@ test_overflow_tracking :: proc() {
 	sync.mutex_unlock(&_overflow_mu)
 
 	if had_overflow {
-		test_pass("overflow event delivered")
+		fmt.println("  INFO: overflow event delivered")
 	} else {
-		// Not a failure — kernel buffer may be large enough
 		fmt.println("  INFO: no overflow occurred (kernel buffer sufficient)")
-		test_pass("overflow tracking (no overflow triggered)")
 	}
 
 	// Verify watcher still works after the burst
@@ -746,34 +540,6 @@ test_overflow_tracking :: proc() {
 	collector_clear(&c)
 	probe := join_path(dir, "PROBE_OVERFLOW.txt")
 	touch_file(probe)
-	if collector_wait(&c, 1, 2 * time.Second) {
-		if collector_has_kind_path(&c, .Added, "PROBE_OVERFLOW") {
-			test_pass("watcher functional after burst")
-		} else {
-			test_fail("post-burst probe", "not detected")
-		}
-	} else {
-		test_fail("post-burst probe", "timeout")
-	}
-}
-
-// === Main ===
-
-main :: proc() {
-	fmt.println("=== odin-fsw integration tests ===")
-	fmt.println()
-
-	test_poll_file_watcher()
-	test_poll_dir_watcher()
-	test_poll_recursive_watcher()
-	test_inotify_file_watcher()
-	test_inotify_dir_watcher()
-	test_inotify_recursive_watcher()
-	test_glob_watcher()
-	test_stress_many_files()
-	test_stress_rapid_lifecycle()
-	test_overflow_tracking()
-
-	fmt.println()
-	fmt.println("=== tests complete ===")
+	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "post-burst probe: timeout")
+	testing.expect(t, collector_has_kind_path(&c, .Added, "PROBE_OVERFLOW"), "post-burst probe: not detected")
 }

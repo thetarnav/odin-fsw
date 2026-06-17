@@ -2,6 +2,7 @@ package fsw
 
 import "core:os"
 import "core:path/filepath"
+import "core:strings"
 
 glob_extract_root :: proc(pattern: string) -> (root: string, remainder: string) {
 	// Find the longest static prefix before the first wildcard.
@@ -89,12 +90,17 @@ glob_scan_dir :: proc(w: ^Watcher_Glob, dir: string) {
 		fullpath, join_err := filepath.join({dir, entry.name}, w.allocator)
 		if join_err != nil { continue }
 		rel, rel_err := filepath.rel(w.inner.path, fullpath)
-		if rel_err != nil { continue }
-		if glob_match_path(w.pattern, rel) {
-			w.matched_files[fullpath] = true
+		if rel_err != nil {
+			delete(fullpath, w.allocator)
+			continue
 		}
 		if entry.type == .Directory {
 			glob_scan_dir(w, fullpath)
+		}
+		if glob_match_path(w.pattern, rel) {
+			w.matched_files[fullpath] = true
+		} else {
+			delete(fullpath, w.allocator)
 		}
 	}
 }
@@ -115,6 +121,9 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 			w.callback(&e)
 		}
 	}
+	for path in old {
+		delete(path, w.allocator)
+	}
 	delete(old)
 }
 
@@ -123,14 +132,15 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 // It filters events through the glob pattern.
 
 glob_filter_event :: proc(gw: ^Watcher_Glob, event: ^Event) {
-	rel, rel_err := filepath.rel(gw.inner.path, event.path)
+	rel, rel_err := filepath.rel(gw.inner.path, event.path, context.temp_allocator)
 	if rel_err != nil { return }
 
 	#partial switch event.kind {
 	case .Added:
 		if !event.is_dir && glob_match_path(gw.pattern, rel) {
-			gw.matched_files[event.path] = true
-			e := Event{kind = .Added, path = event.path}
+			path_clone := strings.clone(event.path, gw.allocator)
+			gw.matched_files[path_clone] = true
+			e := Event{kind = .Added, path = path_clone}
 			gw.callback(&e)
 		}
 	case .Removed:
