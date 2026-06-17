@@ -742,8 +742,9 @@ test_overflow_tracking :: proc() {
 	}
 
 	// Verify watcher still works after the burst
-	probe := join_path(dir, "PROBE_OVERFLOW.txt")
+	time.sleep(500 * time.Millisecond)
 	collector_clear(&c)
+	probe := join_path(dir, "PROBE_OVERFLOW.txt")
 	touch_file(probe)
 	if collector_wait(&c, 1, 2 * time.Second) {
 		if collector_has_kind_path(&c, .Added, "PROBE_OVERFLOW") {
