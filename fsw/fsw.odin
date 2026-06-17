@@ -383,7 +383,6 @@ destroy_dir :: proc(w: ^Watcher_Dir) {
 	if w == nil || !w.running { return }
 	w.running = false
 	backend_dir_destroy(w)
-	delete(w.prev)
 	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }

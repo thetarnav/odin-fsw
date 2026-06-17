@@ -86,7 +86,11 @@ join_path :: proc(a: string, b: string) -> string {
 
 make_temp_dir :: proc(t: ^testing.T, prefix: string) -> string {
 	name := fmt.tprintf("fsw_test_{}_{}", prefix, time.time_to_unix(time.now()))
-	dir := join_path("/tmp", name)
+	temp_dir := os.get_env("TMPDIR", context.temp_allocator)
+	if temp_dir == "" { temp_dir = os.get_env("TEMP", context.temp_allocator) }
+	if temp_dir == "" { temp_dir = os.get_env("TMP", context.temp_allocator) }
+	if temp_dir == "" { temp_dir = "/tmp" }
+	dir := join_path(temp_dir, name)
 	err := os.mkdir(dir)
 	testing.expectf(t, err == nil, "cannot create temp dir %s: %v", dir, err)
 	return dir

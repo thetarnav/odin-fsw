@@ -159,38 +159,32 @@ darwin_dir_thread :: proc(t: ^thread.Thread) {
 	events: [1]kqueue.KEvent
 	for w.running {
 		timeout := posix.timespec{tv_sec = 0, tv_nsec = 100_000_000}
-		n, _ := kqueue.kevent(kq, nil, events[:], &timeout)
-		if n <= 0 { continue }
+		_, _ = kqueue.kevent(kq, nil, events[:], &timeout)
 
-		if events[0].filter == .VNode {
-			fflags := events[0].fflags.vnode
-			if fflags == {} { continue }
+		// Always poll — kqueue VNode doesn't catch file content changes
+		current := make(map[string]File_Info, w.allocator)
+		snapshot_dir_by_name(w.path, &current)
 
-			// Snapshot and diff
-			current := make(map[string]File_Info, w.allocator)
-			snapshot_dir_by_name(w.path, &current)
-
-			for name in w.prev {
-				if _, ok := current[name]; !ok {
-					e := Event{kind = .Removed, path = name}
-					invoke_callback_dir(w, &e)
-				}
+		for name in w.prev {
+			if _, ok := current[name]; !ok {
+				e := Event{kind = .Removed, path = name}
+				invoke_callback_dir(w, &e)
 			}
-
-			for name, fi in current {
-				prev, ok := w.prev[name]
-				if !ok {
-					e := Event{kind = .Added, path = name, is_dir = fi.is_dir}
-					invoke_callback_dir(w, &e)
-				} else if fi.mtime != prev.mtime || fi.size != prev.size {
-					e := Event{kind = .Modified, path = name, is_dir = fi.is_dir}
-					invoke_callback_dir(w, &e)
-				}
-			}
-
-			delete(w.prev)
-			w.prev = current
 		}
+
+		for name, fi in current {
+			prev, ok := w.prev[name]
+			if !ok {
+				e := Event{kind = .Added, path = name, is_dir = fi.is_dir}
+				invoke_callback_dir(w, &e)
+			} else if fi.mtime != prev.mtime || fi.size != prev.size {
+				e := Event{kind = .Modified, path = name, is_dir = fi.is_dir}
+				invoke_callback_dir(w, &e)
+			}
+		}
+
+		delete(w.prev)
+		w.prev = current
 	}
 	delete(w.prev)
 }
@@ -284,26 +278,18 @@ darwin_rec_thread :: proc(t: ^thread.Thread) {
 	events: [64]kqueue.KEvent
 	for w.running {
 		timeout := posix.timespec{tv_sec = 0, tv_nsec = 100_000_000}
-		n, _ := kqueue.kevent(kq, nil, events[:], &timeout)
-		if n <= 0 do continue
+		_, _ = kqueue.kevent(kq, nil, events[:], &timeout)
 
-		for i in 0..<n {
-			if events[i].filter != .VNode do continue
-			fflags := events[i].fflags.vnode
-			if fflags == {} do continue
-
-			fd := int(events[i].ident)
-			dir_path, ok := w.watches[fd]
-			if !ok do continue
-
-			// Snapshot and diff
+		// Poll all watched dirs — kqueue VNode doesn't catch file content changes
+		for fd_key, dir_path in w.watches {
+			_ = fd_key
 			current := make(map[string]File_Info, w.allocator)
 			snapshot_dir_by_name(dir_path, &current)
 
 			dir_prev, has_prev := w.prev[dir_path]
 			if has_prev {
 				for name in dir_prev {
-					if _, ok2 := current[name]; !ok2 {
+					if _, ok := current[name]; !ok {
 						e := Event{kind = .Removed, path = name}
 						if gw != nil {
 							glob_filter_event(gw, &e)
@@ -314,8 +300,8 @@ darwin_rec_thread :: proc(t: ^thread.Thread) {
 				}
 
 				for name, fi in current {
-					prev_fi, ok2 := dir_prev[name]
-					if !ok2 {
+					prev_fi, ok := dir_prev[name]
+					if !ok {
 						e := Event{kind = .Added, path = name, is_dir = fi.is_dir}
 						if gw != nil {
 							glob_filter_event(gw, &e)
@@ -343,4 +329,9 @@ darwin_rec_thread :: proc(t: ^thread.Thread) {
 			w.prev[dir_path] = current
 		}
 	}
+	// Cleanup prev maps
+	for _, inner in w.prev {
+		delete(inner)
+	}
+	delete(w.prev)
 }
