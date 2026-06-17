@@ -8,6 +8,18 @@ poll_file_thread :: proc(t: ^thread.Thread) {
 	for w.running {
 		fi, err := file_stat(w.path)
 		if err != .None {
+			if w.prev.size >= 0 {
+				e := Event{kind = .Removed, path = w.path}
+				w.callback(&e)
+				w.prev = File_Info{size = -1}
+			}
+			time.sleep(w.latency)
+			continue
+		}
+		if w.prev.size < 0 {
+			e := Event{kind = .Added, path = w.path}
+			w.callback(&e)
+			w.prev = fi
 			time.sleep(w.latency)
 			continue
 		}

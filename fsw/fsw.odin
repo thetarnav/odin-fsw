@@ -7,22 +7,24 @@ import "core:time"
 
 // === Watcher types ===
 
-// Single file — native. Zero alloc.
+// Single file — native.
 Watcher_File :: struct {
 	callback:      Event_Callback,
 	path:          string,
 	running:       bool,
 	native_handle: int,
 	thread:        ^thread.Thread,
+	allocator:     mem.Allocator,
 }
 
-// Non-recursive directory — native. Zero alloc.
+// Non-recursive directory — native.
 Watcher_Dir :: struct {
 	callback:      Event_Callback,
 	path:          string,
 	running:       bool,
 	native_handle: int,
 	thread:        ^thread.Thread,
+	allocator:     mem.Allocator,
 }
 
 // Recursive directory — native. Allocates map.
@@ -37,14 +39,15 @@ Watcher_Recursive :: struct {
 	allocator:     mem.Allocator,
 }
 
-// Single file — polling. Inline snapshot, no heap alloc.
+// Single file — polling. Inline snapshot.
 Watcher_File_Poll :: struct {
-	callback: Event_Callback,
-	path:     string,
-	running:  bool,
-	latency:  time.Duration,
-	prev:     File_Info,
-	thread:   ^thread.Thread,
+	callback:  Event_Callback,
+	path:      string,
+	running:   bool,
+	latency:   time.Duration,
+	prev:      File_Info,
+	thread:    ^thread.Thread,
+	allocator: mem.Allocator,
 }
 
 // Non-recursive directory — polling. Allocates file map.
@@ -91,88 +94,114 @@ Watcher :: union {
 	^Watcher_Glob,
 }
 
-// === Constructors ===
+// === Constructors — all heap-allocate, return pointers ===
 
-watch_file :: proc(path: string, cb: Event_Callback) -> (Watcher_File, Error) {
+watch_file :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_File, Error) {
 	p, err := filepath.abs(path)
 	if err != nil {
-		return {}, .Invalid_Path
+		return nil, .Invalid_Path
 	}
-	w := Watcher_File{
-		callback = cb,
-		path     = p,
-		running  = true,
+	w := new(Watcher_File, allocator)
+	if w == nil {
+		return nil, .Backend_Init_Failed
 	}
-	e := backend_file_init(&w)
-	if e != .None {
-		return {}, e
-	}
-	return w, .None
-}
-
-watch_dir :: proc(path: string, cb: Event_Callback) -> (Watcher_Dir, Error) {
-	p, err := filepath.abs(path)
-	if err != nil {
-		return {}, .Invalid_Path
-	}
-	w := Watcher_Dir{
-		callback = cb,
-		path     = p,
-		running  = true,
-	}
-	e := backend_dir_init(&w)
-	if e != .None {
-		return {}, e
-	}
-	return w, .None
-}
-
-watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (Watcher_Recursive, Error) {
-	p, err := filepath.abs(path)
-	if err != nil {
-		return {}, .Invalid_Path
-	}
-	w := Watcher_Recursive{
+	w^ = Watcher_File{
 		callback  = cb,
 		path      = p,
 		running   = true,
 		allocator = allocator,
 	}
-	e := backend_rec_init(&w)
+	e := backend_file_init(w)
 	if e != .None {
-		return {}, e
+		free(w, allocator)
+		return nil, e
 	}
 	return w, .None
 }
 
-watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration) -> (Watcher_File_Poll, Error) {
+watch_dir :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Dir, Error) {
 	p, err := filepath.abs(path)
 	if err != nil {
-		return {}, .Invalid_Path
+		return nil, .Invalid_Path
+	}
+	w := new(Watcher_Dir, allocator)
+	if w == nil {
+		return nil, .Backend_Init_Failed
+	}
+	w^ = Watcher_Dir{
+		callback  = cb,
+		path      = p,
+		running   = true,
+		allocator = allocator,
+	}
+	e := backend_dir_init(w)
+	if e != .None {
+		free(w, allocator)
+		return nil, e
+	}
+	return w, .None
+}
+
+watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
+	p, err := filepath.abs(path)
+	if err != nil {
+		return nil, .Invalid_Path
+	}
+	w := new(Watcher_Recursive, allocator)
+	if w == nil {
+		return nil, .Backend_Init_Failed
+	}
+	w^ = Watcher_Recursive{
+		callback  = cb,
+		path      = p,
+		running   = true,
+		allocator = allocator,
+	}
+	e := backend_rec_init(w)
+	if e != .None {
+		free(w, allocator)
+		return nil, e
+	}
+	return w, .None
+}
+
+watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
+	p, err := filepath.abs(path)
+	if err != nil {
+		return nil, .Invalid_Path
 	}
 	fi, stat_err := file_stat(p)
 	if stat_err != .None {
-		return {}, .Invalid_Path
+		return nil, .Invalid_Path
 	}
-	w := Watcher_File_Poll{
-		callback = cb,
-		path     = p,
-		running  = true,
-		latency  = latency,
-		prev     = fi,
+	w := new(Watcher_File_Poll, allocator)
+	if w == nil {
+		return nil, .Backend_Init_Failed
 	}
-	w.thread = start_poll_file_thread(&w)
+	w^ = Watcher_File_Poll{
+		callback  = cb,
+		path      = p,
+		running   = true,
+		latency   = latency,
+		prev      = fi,
+		allocator = allocator,
+	}
+	w.thread = start_poll_file_thread(w)
 	return w, .None
 }
 
-watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (Watcher_Dir_Poll, Error) {
+watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
 	p, err := filepath.abs(path)
 	if err != nil {
-		return {}, .Invalid_Path
+		return nil, .Invalid_Path
 	}
 	prev := make(map[string]File_Info, allocator)
 	snapshot_dir(p, &prev, allocator)
-	w := Watcher_Dir_Poll{
+	w := new(Watcher_Dir_Poll, allocator)
+	if w == nil {
+		return nil, .Backend_Init_Failed
+	}
+	w^ = Watcher_Dir_Poll{
 		callback  = cb,
 		path      = p,
 		running   = true,
@@ -180,18 +209,22 @@ watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration,
 		prev      = prev,
 		allocator = allocator,
 	}
-	w.thread = start_poll_dir_thread(&w)
+	w.thread = start_poll_dir_thread(w)
 	return w, .None
 }
 
-watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (Watcher_Recursive_Poll, Error) {
+watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error) {
 	p, err := filepath.abs(path)
 	if err != nil {
-		return {}, .Invalid_Path
+		return nil, .Invalid_Path
 	}
 	prev := make(map[string]File_Info, allocator)
 	snapshot_recursive(p, &prev, allocator)
-	w := Watcher_Recursive_Poll{
+	w := new(Watcher_Recursive_Poll, allocator)
+	if w == nil {
+		return nil, .Backend_Init_Failed
+	}
+	w^ = Watcher_Recursive_Poll{
 		callback  = cb,
 		path      = p,
 		running   = true,
@@ -199,7 +232,7 @@ watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time
 		prev      = prev,
 		allocator = allocator,
 	}
-	w.thread = start_poll_rec_thread(&w)
+	w.thread = start_poll_rec_thread(w)
 	return w, .None
 }
 
@@ -241,12 +274,14 @@ destroy_file :: proc(w: ^Watcher_File) {
 	if w == nil || !w.running { return }
 	w.running = false
 	backend_file_destroy(w)
+	free(w, w.allocator)
 }
 
 destroy_dir :: proc(w: ^Watcher_Dir) {
 	if w == nil || !w.running { return }
 	w.running = false
 	backend_dir_destroy(w)
+	free(w, w.allocator)
 }
 
 destroy_rec :: proc(w: ^Watcher_Recursive) {
@@ -254,6 +289,7 @@ destroy_rec :: proc(w: ^Watcher_Recursive) {
 	w.running = false
 	backend_rec_destroy(w)
 	delete(w.watches)
+	free(w, w.allocator)
 }
 
 destroy_file_poll :: proc(w: ^Watcher_File_Poll) {
@@ -263,6 +299,7 @@ destroy_file_poll :: proc(w: ^Watcher_File_Poll) {
 		thread.join(w.thread)
 		thread.destroy(w.thread)
 	}
+	free(w, w.allocator)
 }
 
 destroy_dir_poll :: proc(w: ^Watcher_Dir_Poll) {
@@ -273,6 +310,7 @@ destroy_dir_poll :: proc(w: ^Watcher_Dir_Poll) {
 		thread.destroy(w.thread)
 	}
 	delete(w.prev)
+	free(w, w.allocator)
 }
 
 destroy_rec_poll :: proc(w: ^Watcher_Recursive_Poll) {
@@ -283,12 +321,16 @@ destroy_rec_poll :: proc(w: ^Watcher_Recursive_Poll) {
 		thread.destroy(w.thread)
 	}
 	delete(w.prev)
+	free(w, w.allocator)
 }
 
 destroy_glob :: proc(w: ^Watcher_Glob) {
 	if w == nil || !w.running { return }
 	w.running = false
-	destroy_rec(&w.inner)
+	// Clean up inner watcher directly (it's embedded, not separately allocated)
+	w.inner.running = false
+	backend_rec_destroy(&w.inner)
+	delete(w.inner.watches)
 	delete(w.matched_files)
 	free(w, w.allocator)
 }
