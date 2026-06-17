@@ -113,6 +113,7 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 		thread.join(w.thread)
 		windows.CloseHandle(windows.HANDLE(w.thread.user_args[0])) // event
 		windows.CloseHandle(windows.HANDLE(w.thread.user_args[1])) // iocp
+		free(([^]u8)(w.thread.user_args[2]), w.allocator)           // buf
 		free((^windows.OVERLAPPED)(w.thread.user_args[4]), w.allocator)
 		thread.destroy(w.thread)
 	}
@@ -206,6 +207,7 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 		thread.join(w.thread)
 		windows.CloseHandle(windows.HANDLE(w.thread.user_args[0]))
 		windows.CloseHandle(windows.HANDLE(w.thread.user_args[1]))
+		free(([^]u8)(w.thread.user_args[2]), w.allocator)           // buf
 		free((^windows.OVERLAPPED)(w.thread.user_args[4]), w.allocator)
 		thread.destroy(w.thread)
 	}
@@ -301,6 +303,7 @@ backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 		thread.join(w.thread)
 		windows.CloseHandle(windows.HANDLE(w.thread.user_args[0]))
 		windows.CloseHandle(windows.HANDLE(w.thread.user_args[1]))
+		free(([^]u8)(w.thread.user_args[2]), w.allocator)           // buf
 		free((^windows.OVERLAPPED)(w.thread.user_args[4]), w.allocator)
 		thread.destroy(w.thread)
 	}
