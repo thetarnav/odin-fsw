@@ -1,7 +1,19 @@
-package fsw
+// backend_darwin.odin — macOS backend using kqueue + EVFILT_VNODE.
+//
+// Platform-specific backend compiled only on macOS (Odin's _os suffix convention).
+// Implements all 7 backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
+//
+// Architecture:
+//   - Each watcher opens the target with os.open() to get a file descriptor
+//   - A kqueue is created and EVFILT_VNODE kevents are registered with
+//     {.Delete, .Write, .Extend, .Attrib, .Link, .Rename} flags
+//   - A background thread polls kevent() with 100ms timeout
+//   - Recursive watcher: per-subdirectory fd registration, storing fd→dir_path
+//     in w.watches map. New subdirs are auto-watched on .Added events.
+//   - Glob routing: the rec thread checks w.user_data; if non-nil, events
+//     go through glob_filter_event instead of the direct callback.
 
-// macOS backend — kqueue + EVFILT_VNODE for all watcher types.
-// Recursive watching registers each subdirectory individually.
+package fsw
 
 import "core:os"
 import "core:path/filepath"

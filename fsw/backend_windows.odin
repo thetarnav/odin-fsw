@@ -1,8 +1,20 @@
-package fsw
+// backend_windows.odin — Windows backend using ReadDirectoryChangesW + IOCP.
+//
+// Platform-specific backend compiled only on Windows (Odin's _os suffix convention).
+// Implements all 7 backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
+//
+// Architecture:
+//   - Directories are opened with CreateFileW(FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OVERLAPPED)
+//   - An I/O completion port is created with CreateIoCompletionPort
+//   - ReadDirectoryChangesW is issued with an OVERLAPPED + event handle
+//   - A background thread calls GetQueuedCompletionStatus with 50ms timeout
+//   - FILE_NOTIFY_INFORMATION entries are parsed by walking next_entry_offset
+//   - File watcher: watches the parent directory, filters events by target filename
+//   - Recursive watcher: uses bWatchSubtree=TRUE for OS-level recursion
+//   - Glob routing: the thread checks w.user_data; if non-nil, events
+//     go through glob_filter_event instead of the direct callback.
 
-// Windows backend — ReadDirectoryChangesW + IOCP for all watcher types.
-// File watcher watches parent directory and filters by filename.
-// Recursive watcher uses bWatchSubtree=TRUE.
+package fsw
 
 import "core:os"
 import "core:path/filepath"

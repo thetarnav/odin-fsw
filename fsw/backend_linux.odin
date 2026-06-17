@@ -1,3 +1,19 @@
+// backend_linux.odin — Linux backend using inotify + epoll.
+//
+// Platform-specific backend compiled only on Linux (Odin's _os suffix convention).
+// Implements all 7 backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
+//
+// Architecture:
+//   - Each watcher creates an inotify fd with inotify_init1({.NONBLOCK, .CLOEXEC})
+//   - A background thread polls the fd with linux.read(), sleeping 10ms on EAGAIN
+//   - Events are normalized via inotify_normalize() into Event_Kind values
+//   - Recursive watcher: per-subdirectory inotify watches stored in w.watches map
+//     (wd → dir_path). New subdirs are auto-watched on .Added events.
+//   - Glob routing: inotify_rec_thread checks w.user_data; if non-nil, events
+//     go through glob_filter_event instead of the direct callback.
+//
+// Internal helpers: to_cstring, inotify_normalize, inotify_event_name, rec_add_watch
+
 package fsw
 
 import "core:os"

@@ -1,7 +1,10 @@
-package fsw
+// backend_freebsd.odin — FreeBSD backend using kqueue + EVFILT_VNODE.
+//
+// Platform-specific backend compiled only on FreeBSD (Odin's _os suffix convention).
+// Identical architecture to backend_darwin.odin — see that file for details.
+// Implements all 7 backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
 
-// FreeBSD backend — kqueue + EVFILT_VNODE for all watcher types.
-// Recursive watching registers each subdirectory individually.
+package fsw
 
 import "core:os"
 import "core:path/filepath"

@@ -1,3 +1,19 @@
+// fsw.odin — Main library file: watcher types, constructors, destroy, rescan.
+//
+// This is the primary entry point for the fsw library. It contains:
+//   - 7 watcher structs (Watcher_File, Watcher_Dir, Watcher_Recursive,
+//     Watcher_File_Poll, Watcher_Dir_Poll, Watcher_Recursive_Poll, Watcher_Glob)
+//   - Watcher union type for generic handling
+//   - 7 constructor procs (watch_file, watch_dir, watch_dir_recursive,
+//     watch_file_poll, watch_dir_poll, watch_dir_poll_recursive, watch_glob)
+//   - destroy procedure group (accepts any watcher type)
+//   - rescan procedure group (for recursive and glob watchers)
+//   - Context-restoring callback helpers (invoke_callback_*)
+//
+// All constructors heap-allocate and return pointers. All destroy procs
+// free the watcher and its owned resources. The procedure groups provide
+// overloaded dispatch — call destroy(w) or rescan(w) with any watcher type.
+
 package fsw
 
 import "base:runtime"
@@ -8,7 +24,8 @@ import "core:time"
 
 // === Watcher types ===
 
-// Single file — native.
+// Watcher_File watches a single file using the OS-native backend.
+// Zero additional allocations beyond the struct itself.
 Watcher_File :: struct {
 	callback:      Event_Callback,
 	path:          string,
@@ -19,7 +36,8 @@ Watcher_File :: struct {
 	allocator:     mem.Allocator,
 }
 
-// Non-recursive directory — native.
+// Watcher_Dir watches a directory (non-recursive) using the OS-native backend.
+// Only immediate children are reported. Zero additional allocations.
 Watcher_Dir :: struct {
 	callback:      Event_Callback,
 	path:          string,
@@ -30,7 +48,10 @@ Watcher_Dir :: struct {
 	allocator:     mem.Allocator,
 }
 
-// Recursive directory — native. Allocates map.
+// Watcher_Recursive watches a directory and all its subdirectories.
+// Allocates a map to track per-subdirectory watches. New subdirectories
+// are automatically watched when detected. The user_data field is reserved
+// for internal use by Watcher_Glob.
 Watcher_Recursive :: struct {
 	callback:    Event_Callback,
 	path:        string,
@@ -43,7 +64,8 @@ Watcher_Recursive :: struct {
 	allocator:     mem.Allocator,
 }
 
-// Single file — polling. Inline snapshot.
+// Watcher_File_Poll watches a single file by stat-based polling.
+// The prev field holds the last known state inline (no extra allocation).
 Watcher_File_Poll :: struct {
 	callback:   Event_Callback,
 	path:       string,
@@ -55,7 +77,8 @@ Watcher_File_Poll :: struct {
 	allocator:  mem.Allocator,
 }
 
-// Non-recursive directory — polling. Allocates file map.
+// Watcher_Dir_Poll watches a directory by snapshot-based polling.
+// Allocates a map of file info snapshots, replaced each polling interval.
 Watcher_Dir_Poll :: struct {
 	callback:   Event_Callback,
 	path:       string,
@@ -67,7 +90,8 @@ Watcher_Dir_Poll :: struct {
 	allocator:  mem.Allocator,
 }
 
-// Recursive directory — polling. Allocates file map + subdir tracking.
+// Watcher_Recursive_Poll watches a directory recursively by snapshot-based polling.
+// Allocates a map of file info snapshots covering all subdirectories.
 Watcher_Recursive_Poll :: struct {
 	callback:   Event_Callback,
 	path:       string,
@@ -79,7 +103,10 @@ Watcher_Recursive_Poll :: struct {
 	allocator:  mem.Allocator,
 }
 
-// Glob — watches directory recursively, filters by glob pattern.
+// Watcher_Glob watches files matching a glob pattern within a directory tree.
+// Internally embeds a Watcher_Recursive and filters its events through the
+// glob pattern. Tracks matched files in a map. Only non-directory files
+// that match the pattern trigger Added/Modified/Removed callbacks.
 Watcher_Glob :: struct {
 	callback:      Event_Callback,
 	pattern:       string,
@@ -90,8 +117,8 @@ Watcher_Glob :: struct {
 	allocator:     mem.Allocator,
 }
 
-// === Union ===
-
+// Watcher is a tagged union that can hold any watcher pointer.
+// Use with destroy, rescan, or as_watcher for generic handling.
 Watcher :: union {
 	^Watcher_File,
 	^Watcher_Dir,
@@ -138,6 +165,9 @@ invoke_callback_glob :: proc(w: ^Watcher_Glob, e: ^Event) {
 
 // === Constructors — all heap-allocate, return pointers ===
 
+// watch_file creates a native watcher for a single file.
+// The callback fires on Added, Removed, Modified, or Renamed events.
+// Returns a heap-allocated watcher pointer. Call destroy(w) when done.
 watch_file :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_File, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
@@ -162,6 +192,8 @@ watch_file :: proc(path: string, cb: Event_Callback, allocator := context.alloca
 	return w, .None
 }
 
+// watch_dir creates a native watcher for a directory (non-recursive).
+// Only events in the immediate directory are reported.
 watch_dir :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Dir, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
@@ -186,6 +218,9 @@ watch_dir :: proc(path: string, cb: Event_Callback, allocator := context.allocat
 	return w, .None
 }
 
+// watch_dir_recursive creates a native watcher for a directory tree.
+// Subdirectories are automatically watched as they appear.
+// Allocates a map to track per-subdirectory watches.
 watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
@@ -210,6 +245,8 @@ watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := conte
 	return w, .None
 }
 
+// watch_file_poll creates a polling watcher for a single file.
+// The file is stat()ed every `latency` interval. No OS-native watcher is used.
 watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
@@ -236,6 +273,8 @@ watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration
 	return w, .None
 }
 
+// watch_dir_poll creates a polling watcher for a directory.
+// The directory is snapshot-listed every `latency` interval; diffs produce events.
 watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
@@ -260,6 +299,8 @@ watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration,
 	return w, .None
 }
 
+// watch_dir_poll_recursive creates a polling watcher for a directory tree.
+// All subdirectories are snapshot-listed every `latency` interval.
 watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
@@ -284,6 +325,10 @@ watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time
 	return w, .None
 }
 
+// watch_glob creates a watcher that filters events through a glob pattern.
+// The static prefix of the pattern is used as the watch root (e.g. "/tmp" from "/tmp/*.txt").
+// The directory is watched recursively; only files matching the pattern trigger callbacks.
+// Performs an initial scan to detect pre-existing matching files.
 watch_glob :: proc(pattern: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_Glob, Error) {
 	root, pat := glob_extract_root(pattern)
 	p, err := filepath.abs(root, allocator)
@@ -321,6 +366,7 @@ watch_glob :: proc(pattern: string, cb: Event_Callback, allocator := context.all
 
 // === destroy ===
 
+// destroy_file stops and frees a Watcher_File. Safe to call with nil.
 destroy_file :: proc(w: ^Watcher_File) {
 	if w == nil || !w.running { return }
 	w.running = false
@@ -329,6 +375,7 @@ destroy_file :: proc(w: ^Watcher_File) {
 	free(w, w.allocator)
 }
 
+// destroy_dir stops and frees a Watcher_Dir. Safe to call with nil.
 destroy_dir :: proc(w: ^Watcher_Dir) {
 	if w == nil || !w.running { return }
 	w.running = false
@@ -337,6 +384,7 @@ destroy_dir :: proc(w: ^Watcher_Dir) {
 	free(w, w.allocator)
 }
 
+// destroy_rec stops and frees a Watcher_Recursive. Safe to call with nil.
 destroy_rec :: proc(w: ^Watcher_Recursive) {
 	if w == nil || !w.running { return }
 	w.running = false
@@ -349,6 +397,7 @@ destroy_rec :: proc(w: ^Watcher_Recursive) {
 	free(w, w.allocator)
 }
 
+// destroy_file_poll stops and frees a Watcher_File_Poll. Joins the polling thread. Safe to call with nil.
 destroy_file_poll :: proc(w: ^Watcher_File_Poll) {
 	if w == nil || !w.running { return }
 	w.running = false
@@ -360,6 +409,7 @@ destroy_file_poll :: proc(w: ^Watcher_File_Poll) {
 	free(w, w.allocator)
 }
 
+// destroy_dir_poll stops and frees a Watcher_Dir_Poll. Joins the polling thread. Safe to call with nil.
 destroy_dir_poll :: proc(w: ^Watcher_Dir_Poll) {
 	if w == nil || !w.running { return }
 	w.running = false
@@ -372,6 +422,7 @@ destroy_dir_poll :: proc(w: ^Watcher_Dir_Poll) {
 	free(w, w.allocator)
 }
 
+// destroy_rec_poll stops and frees a Watcher_Recursive_Poll. Joins the polling thread. Safe to call with nil.
 destroy_rec_poll :: proc(w: ^Watcher_Recursive_Poll) {
 	if w == nil || !w.running { return }
 	w.running = false
@@ -384,6 +435,7 @@ destroy_rec_poll :: proc(w: ^Watcher_Recursive_Poll) {
 	free(w, w.allocator)
 }
 
+// destroy_glob stops and frees a Watcher_Glob and its embedded recursive watcher. Safe to call with nil.
 destroy_glob :: proc(w: ^Watcher_Glob) {
 	if w == nil || !w.running { return }
 	w.running = false
@@ -401,6 +453,7 @@ destroy_glob :: proc(w: ^Watcher_Glob) {
 	free(w, w.allocator)
 }
 
+// destroy_watcher destroys any watcher via the Watcher union. Dispatches to the correct typed destroy proc.
 destroy_watcher :: proc(w: ^Watcher) {
 	if w == nil do return
     switch v in w {
@@ -414,6 +467,8 @@ destroy_watcher :: proc(w: ^Watcher) {
     }
 }
 
+// destroy is a procedure group that accepts any watcher type.
+// Call destroy(w) with any ^Watcher_* or ^Watcher to free it.
 destroy :: proc {
 	destroy_file,
 	destroy_dir,
@@ -427,10 +482,12 @@ destroy :: proc {
 
 // === rescan ===
 
+// rescan_rec forces a full rescan of a recursive watcher, re-registering all inotify/kqueue watches.
 rescan_rec :: proc(w: ^Watcher_Recursive) -> Error {
 	return backend_rec_rescan(w)
 }
 
+// rescan_rec_poll forces a full rescan of a polling recursive watcher, rebuilding the snapshot.
 rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error {
 	delete(w.prev)
 	w.prev = make(map[string]File_Info, w.allocator)
@@ -438,6 +495,7 @@ rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error {
 	return .None
 }
 
+// rescan_glob forces a full rescan of a glob watcher, re-registering watches and re-matching files.
 rescan_glob :: proc(w: ^Watcher_Glob) -> Error {
 	e := rescan_rec(&w.inner)
 	if e != .None { return e }
@@ -445,6 +503,7 @@ rescan_glob :: proc(w: ^Watcher_Glob) -> Error {
 	return .None
 }
 
+// rescan_watcher rescans any watcher via the Watcher union. No-op for non-recursive watchers.
 rescan_watcher :: proc(w: ^Watcher) -> Error {
 	if w == nil do return .Invalid_Path
     #partial switch v in w {
@@ -455,6 +514,9 @@ rescan_watcher :: proc(w: ^Watcher) -> Error {
 	return .None
 }
 
+// rescan is a procedure group that accepts any watcher type.
+// For recursive and glob watchers, forces a full re-scan.
+// For non-recursive watchers, returns .None (no-op).
 rescan :: proc {
 	rescan_rec,
 	rescan_rec_poll,

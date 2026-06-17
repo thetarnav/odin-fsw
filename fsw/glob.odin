@@ -1,3 +1,16 @@
+// glob.odin — Glob pattern matching and Watcher_Glob support logic.
+//
+// Internal helpers for the glob watcher:
+//   - glob_extract_root: split a glob pattern into a static directory root and the pattern remainder
+//   - glob_match_path: test a relative path against a glob pattern
+//   - glob_initial_scan / glob_scan_dir: walk the watch root and populate matched_files
+//   - glob_rescan: full re-scan on rescan, emitting Added/Removed events for changes
+//   - glob_filter_event: filter recursive watcher events through the glob pattern
+//   - glob_inner_callback: no-op placeholder (actual filtering happens in backend threads)
+//
+// The glob watcher works by embedding a Watcher_Recursive and routing its events
+// through glob_filter_event. The backend thread checks user_data to decide routing.
+
 package fsw
 
 import "core:os"

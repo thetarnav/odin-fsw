@@ -1,3 +1,17 @@
+// backend_poll.odin — Polling backend for all platforms.
+//
+// Stat-based polling fallback that works on every platform. Used by:
+//   - Watcher_File_Poll: polls a single file with file_stat()
+//   - Watcher_Dir_Poll: snapshot-diffs a directory each interval
+//   - Watcher_Recursive_Poll: snapshot-diffs recursively each interval
+//
+// Each watcher type has a dedicated thread proc (poll_file_thread, poll_dir_thread,
+// poll_rec_thread) that loops sleeping w.latency between checks. The start_poll_*
+// helpers create and start these threads.
+//
+// File deletion is tracked via a prev.size < 0 sentinel. When a file disappears,
+// a .Removed event fires; when it reappears, .Added fires.
+
 package fsw
 
 import "core:thread"
