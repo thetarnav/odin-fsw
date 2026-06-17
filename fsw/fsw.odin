@@ -37,13 +37,14 @@ Watcher_File :: struct {
 }
 
 // Watcher_Dir watches a directory (non-recursive) using the OS-native backend.
-// Only immediate children are reported. Zero additional allocations.
+// Only immediate children are reported.
 Watcher_Dir :: struct {
 	callback:      Event_Callback,
 	path:          string,
 	running:       bool,
 	native_handle: int,
 	thread:        ^thread.Thread,
+	prev:          map[string]File_Info, // snapshot for kqueue dir diffing
 	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
 }
@@ -58,6 +59,7 @@ Watcher_Recursive :: struct {
 	running:     bool,
 	native_handle: int,
 	watches:       map[int]string,
+	prev:          map[string]map[string]File_Info, // per-dir snapshot for kqueue diffing
 	thread:        ^thread.Thread,
 	user_data:     rawptr,
 	caller_ctx:    runtime.Context,
@@ -381,6 +383,7 @@ destroy_dir :: proc(w: ^Watcher_Dir) {
 	if w == nil || !w.running { return }
 	w.running = false
 	backend_dir_destroy(w)
+	delete(w.prev)
 	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
@@ -394,6 +397,10 @@ destroy_rec :: proc(w: ^Watcher_Recursive) {
 		delete(v, w.allocator)
 	}
 	delete(w.watches)
+	for _, inner in w.prev {
+		delete(inner)
+	}
+	delete(w.prev)
 	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }

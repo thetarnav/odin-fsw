@@ -141,6 +141,10 @@ freebsd_dir_thread :: proc(t: ^thread.Thread) {
 	w := (^Watcher_Dir)(t.data)
 	kq := posix.FD(w.native_handle)
 
+	// Take initial snapshot
+	w.prev = make(map[string]File_Info, w.allocator)
+	snapshot_dir_by_name(w.path, &w.prev)
+
 	events: [1]kqueue.KEvent
 	for w.running {
 		timeout := posix.timespec{tv_sec = 0, tv_nsec = 100_000_000}
@@ -150,11 +154,34 @@ freebsd_dir_thread :: proc(t: ^thread.Thread) {
 		if events[0].filter == .VNode {
 			fflags := events[0].fflags.vnode
 			if fflags == {} { continue }
-			kind := kq_normalize(fflags)
-			e := Event{kind = kind, path = w.path, is_dir = true}
-			invoke_callback_dir(w, &e)
+
+			// Snapshot and diff
+			current := make(map[string]File_Info, w.allocator)
+			snapshot_dir_by_name(w.path, &current)
+
+			for name in w.prev {
+				if _, ok := current[name]; !ok {
+					e := Event{kind = .Removed, path = name}
+					invoke_callback_dir(w, &e)
+				}
+			}
+
+			for name, fi in current {
+				prev, ok := w.prev[name]
+				if !ok {
+					e := Event{kind = .Added, path = name, is_dir = fi.is_dir}
+					invoke_callback_dir(w, &e)
+				} else if fi.mtime != prev.mtime || fi.size != prev.size {
+					e := Event{kind = .Modified, path = name, is_dir = fi.is_dir}
+					invoke_callback_dir(w, &e)
+				}
+			}
+
+			delete(w.prev)
+			w.prev = current
 		}
 	}
+	delete(w.prev)
 }
 
 // === Watcher_Recursive ===
@@ -164,6 +191,7 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	if errno != .NONE { return .Backend_Init_Failed }
 	w.native_handle = int(kq)
 	w.watches = make(map[int]string, w.allocator)
+	w.prev = make(map[string]map[string]File_Info, w.allocator)
 
 	freebsd_rec_add_watch(w, w.path)
 
@@ -193,6 +221,11 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 		posix.close(posix.FD(fd_key))
 	}
 	clear(&w.watches)
+	// Clear prev snapshots
+	for _, inner in w.prev {
+		delete(inner)
+	}
+	clear(&w.prev)
 	freebsd_rec_add_watch(w, w.path)
 	return .None
 }
@@ -215,6 +248,11 @@ freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	}
 
 	w.watches[fd] = strings.clone(dir, w.allocator)
+
+	// Take initial snapshot of this dir
+	dir_prev := make(map[string]File_Info, w.allocator)
+	snapshot_dir_by_name(dir, &dir_prev)
+	w.prev[dir] = dir_prev
 
 	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
 	if read_err != nil do return
@@ -247,18 +285,51 @@ freebsd_rec_thread :: proc(t: ^thread.Thread) {
 			dir_path, ok := w.watches[fd]
 			if !ok do continue
 
-			kind := kq_normalize(fflags)
-			e := Event{kind = kind, path = dir_path, is_dir = true}
+			// Snapshot and diff
+			current := make(map[string]File_Info, w.allocator)
+			snapshot_dir_by_name(dir_path, &current)
 
-			if gw != nil {
-				glob_filter_event(gw, &e)
-			} else {
-				invoke_callback_rec(w, &e)
+			dir_prev, has_prev := w.prev[dir_path]
+			if has_prev {
+				for name in dir_prev {
+					if _, ok2 := current[name]; !ok2 {
+						e := Event{kind = .Removed, path = name}
+						if gw != nil {
+							glob_filter_event(gw, &e)
+						} else {
+							invoke_callback_rec(w, &e)
+						}
+					}
+				}
+
+				for name, fi in current {
+					prev_fi, ok2 := dir_prev[name]
+					if !ok2 {
+						e := Event{kind = .Added, path = name, is_dir = fi.is_dir}
+						if gw != nil {
+							glob_filter_event(gw, &e)
+						} else {
+							invoke_callback_rec(w, &e)
+						}
+						// Auto-watch new subdirs
+						if fi.is_dir {
+							subdir := filepath.join({dir_path, name}, context.temp_allocator) or_continue
+							freebsd_rec_add_watch(w, subdir)
+						}
+					} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
+						e := Event{kind = .Modified, path = name, is_dir = fi.is_dir}
+						if gw != nil {
+							glob_filter_event(gw, &e)
+						} else {
+							invoke_callback_rec(w, &e)
+						}
+					}
+				}
+
+				delete(dir_prev)
 			}
 
-			if kind == .Added {
-				freebsd_rec_add_watch(w, dir_path)
-			}
+			w.prev[dir_path] = current
 		}
 	}
 }

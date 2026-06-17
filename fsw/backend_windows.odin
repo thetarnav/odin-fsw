@@ -61,11 +61,11 @@ fni_name :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION) -> string {
 backend_file_init :: proc(w: ^Watcher_File) -> Error {
 	dir := filepath.dir(w.path)
 
-	wpath := windows.utf8_to_utf16_alloc(dir, context.temp_allocator)
-	if len(wpath) == 0 { return .Backend_Init_Failed }
+	wpath := windows.utf8_to_wstring_alloc(dir, context.temp_allocator)
+	if wpath == nil { return .Backend_Init_Failed }
 
 	handle := windows.CreateFileW(
-		wstring(raw_data(wpath)),
+		wpath,
 		windows.FILE_LIST_DIRECTORY,
 		windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE,
 		nil,
@@ -155,11 +155,11 @@ win_file_thread :: proc(t: ^thread.Thread) {
 // === Watcher_Dir ===
 
 backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
-	wpath := windows.utf8_to_utf16_alloc(w.path, context.temp_allocator)
-	if len(wpath) == 0 { return .Backend_Init_Failed }
+	wpath := windows.utf8_to_wstring_alloc(w.path, context.temp_allocator)
+	if wpath == nil { return .Backend_Init_Failed }
 
 	handle := windows.CreateFileW(
-		wstring(raw_data(wpath)),
+		wpath,
 		windows.FILE_LIST_DIRECTORY,
 		windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE,
 		nil,
@@ -250,11 +250,11 @@ win_dir_thread :: proc(t: ^thread.Thread) {
 // === Watcher_Recursive ===
 
 backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
-	wpath := windows.utf8_to_utf16_alloc(w.path, context.temp_allocator)
-	if len(wpath) == 0 { return .Backend_Init_Failed }
+	wpath := windows.utf8_to_wstring_alloc(w.path, context.temp_allocator)
+	if wpath == nil { return .Backend_Init_Failed }
 
 	handle := windows.CreateFileW(
-		wstring(raw_data(wpath)),
+		wpath,
 		windows.FILE_LIST_DIRECTORY,
 		windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE,
 		nil,

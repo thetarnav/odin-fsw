@@ -69,6 +69,23 @@ snapshot_recursive :: proc(dir: string, prev: ^map[string]File_Info, allocator: 
 	}
 }
 
+// snapshot_dir_by_name populates a map keyed by entry name (not full path).
+// Used by kqueue backends that detect changes via dir-level VNode events
+// and need to diff by filename.
+snapshot_dir_by_name :: proc(dir: string, prev: ^map[string]File_Info) {
+	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if err != nil do return
+	for entry in entries {
+		if entry.name == "." || entry.name == ".." do continue
+		prev[entry.name] = File_Info{
+			is_dir = entry.type == .Directory,
+			size   = entry.size,
+			mtime  = entry.modification_time,
+			inode  = entry.inode,
+		}
+	}
+}
+
 // diff_file compares a path's current state against a previous File_Info.
 // Returns the event kind, new info, and whether a change was detected.
 diff_file :: proc(path: string, prev: File_Info) -> (kind: Event_Kind, new_fi: File_Info, changed: bool) {
