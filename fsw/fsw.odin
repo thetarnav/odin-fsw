@@ -396,10 +396,7 @@ destroy_rec :: proc(w: ^Watcher_Recursive) {
 		delete(v, w.allocator)
 	}
 	delete(w.watches)
-	for _, inner in w.prev {
-		delete(inner)
-	}
-	delete(w.prev)
+	// prev cleanup handled by backend thread (kqueue) or unused (inotify)
 	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
