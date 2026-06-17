@@ -290,7 +290,9 @@ darwin_rec_thread :: proc(t: ^thread.Thread) {
 			if has_prev {
 				for name in dir_prev {
 					if _, ok := current[name]; !ok {
-						e := Event{kind = .Removed, path = name}
+						fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
+						if join_err != nil { continue }
+						e := Event{kind = .Removed, path = fullpath}
 						if gw != nil {
 							glob_filter_event(gw, &e)
 						} else {
@@ -302,7 +304,9 @@ darwin_rec_thread :: proc(t: ^thread.Thread) {
 				for name, fi in current {
 					prev_fi, ok := dir_prev[name]
 					if !ok {
-						e := Event{kind = .Added, path = name, is_dir = fi.is_dir}
+						fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
+						if join_err != nil { continue }
+						e := Event{kind = .Added, path = fullpath, is_dir = fi.is_dir}
 						if gw != nil {
 							glob_filter_event(gw, &e)
 						} else {
@@ -310,11 +314,12 @@ darwin_rec_thread :: proc(t: ^thread.Thread) {
 						}
 						// Auto-watch new subdirs
 						if fi.is_dir {
-							subdir := filepath.join({dir_path, name}, context.temp_allocator) or_continue
-							darwin_rec_add_watch(w, subdir)
+							darwin_rec_add_watch(w, fullpath)
 						}
 					} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
-						e := Event{kind = .Modified, path = name, is_dir = fi.is_dir}
+						fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
+						if join_err != nil { continue }
+						e := Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir}
 						if gw != nil {
 							glob_filter_event(gw, &e)
 						} else {
