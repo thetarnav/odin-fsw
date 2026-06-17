@@ -329,6 +329,8 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 	collector_clear(&c)
 
 	// 3. Modify nested file
+	// Small delay so snapshot-based backends capture the file at its initial size
+	time.sleep(150 * time.Millisecond)
 	write_file(nested, "updated")
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested modify: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Modified, "nested.txt"), "nested modify: no Modified event")
@@ -385,6 +387,7 @@ test_glob_watcher :: proc(t: ^testing.T) {
 	collector_clear(&c)
 
 	// 3. Modify the .txt file (should match)
+	time.sleep(150 * time.Millisecond)
 	write_file(new_txt, "modified")
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching modify: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Modified, "new.txt"), "matching modify: no Modified event")
@@ -420,12 +423,13 @@ test_stress_many_files :: proc(t: ^testing.T) {
 		touch_file(path)
 	}
 
-	// Wait for events to arrive
-	collector_wait(&c, 10, 5 * time.Second)
+	// Wait for all events to arrive and settle
+	collector_wait(&c, 50, 5 * time.Second)
+	time.sleep(500 * time.Millisecond)
+	collector_clear(&c)
 
 	// Verify watcher is still alive — create one more file with a unique name
 	probe := join_path(dir, "PROBE_AFTER_STRESS.txt")
-	collector_clear(&c)
 	touch_file(probe)
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "post-stress probe: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Added, "PROBE_AFTER_STRESS"), "post-stress probe: not detected")
