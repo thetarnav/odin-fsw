@@ -1,7 +1,7 @@
 // backend_darwin.odin — macOS backend using kqueue + EVFILT_VNODE.
 //
-// Platform-specific backend compiled only on macOS (Odin's _os suffix convention).
-// Implements all 7 backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
+// Platform-specific backend compiled only on macOS.
+// Implements all backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
 //
 // Architecture:
 //   - Each watcher opens the target with os.open() to get a file descriptor

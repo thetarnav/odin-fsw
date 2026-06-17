@@ -1,7 +1,7 @@
 // backend_linux.odin — Linux backend using inotify + epoll.
 //
-// Platform-specific backend compiled only on Linux (Odin's _os suffix convention).
-// Implements all 7 backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
+// Platform-specific backend compiled only on Linux.
+// Implements all backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
 //
 // Architecture:
 //   - Each watcher creates an inotify fd with inotify_init1({.NONBLOCK, .CLOEXEC})

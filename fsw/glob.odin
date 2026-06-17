@@ -52,49 +52,6 @@ glob_match_path :: proc(pattern: string, path: string) -> bool {
 	return ok
 }
 
-glob_inner_callback :: proc(event: ^Event) {
-	// This is called by the inner Watcher_Recursive.
-	// We need to recover the Watcher_Glob pointer from user_data.
-	// The inner watcher's user_data points to the Watcher_Glob.
-	// But how do we get the inner watcher pointer here?
-	// The callback is invoked from the inotify thread with the event.
-	// We don't have a direct reference to the inner watcher.
-	// 
-	// Solution: the inner watcher's user_data = ^Watcher_Glob.
-	// We need to get the inner watcher pointer somehow.
-	// Since the callback proc is a package-level proc (not a closure),
-	// we can't capture the watcher pointer.
-	//
-	// Workaround: use a thread-local or global variable.
-	// Better: the inner watcher's callback should be set to a proc
-	// that knows the glob watcher pointer. We can do this by having
-	// the inner watcher's thread check user_data.
-	//
-	// Actually, the simplest approach: we change the callback to be
-	// called from the inner thread with access to the watcher struct.
-	// Since the inner watcher's callback is set before the thread starts,
-	// and the thread has access to the watcher via t.data,
-	// we can have the thread call a wrapper that extracts user_data.
-	//
-	// But the callback is set on the Watcher_Recursive struct, not the thread.
-	// The thread calls w.callback(event) where w is the Watcher_Recursive.
-	// So the callback doesn't have access to w itself.
-	//
-	// FINAL APPROACH: Don't use this callback. Instead, the recursive
-	// thread calls a special internal proc that checks if user_data is set.
-	// If so, it wraps the event through the glob filter.
-	//
-	// For now, this is a no-op. The actual glob filtering happens in
-	// inotify_rec_thread when it detects user_data is set.
-	_ = event
-}
-
-glob_initial_scan :: proc(w: ^Watcher_Glob) {
-	// Walk the watch root, find all files matching the pattern,
-	// and populate matched_files.
-	glob_scan_dir(w, w.inner.path)
-}
-
 glob_scan_dir :: proc(w: ^Watcher_Glob, dir: string) {
 	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
 	if err != nil do return

@@ -1,11 +1,11 @@
 // fsw.odin — Main library file: watcher types, constructors, destroy, rescan.
 //
 // This is the primary entry point for the fsw library. It contains:
-//   - 7 watcher structs (Watcher_File, Watcher_Dir, Watcher_Recursive,
-//     Watcher_File_Poll, Watcher_Dir_Poll, Watcher_Recursive_Poll, Watcher_Glob)
+//   - watcher structs (Watcher_File, Watcher_Dir, Watcher_Recursive,
+//                      Watcher_File_Poll, Watcher_Dir_Poll, Watcher_Recursive_Poll, Watcher_Glob)
 //   - Watcher union type for generic handling
-//   - 7 constructor procs (watch_file, watch_dir, watch_dir_recursive,
-//     watch_file_poll, watch_dir_poll, watch_dir_poll_recursive, watch_glob)
+//   - constructor procs (watch_file, watch_dir, watch_dir_recursive,
+//                        watch_file_poll, watch_dir_poll, watch_dir_poll_recursive, watch_glob)
 //   - destroy procedure group (accepts any watcher type)
 //   - rescan procedure group (for recursive and glob watchers)
 //   - Context-restoring callback helpers (invoke_callback_*)
@@ -347,7 +347,7 @@ watch_glob :: proc(pattern: string, cb: Event_Callback, allocator := context.all
 		allocator   = allocator,
 	}
 	w.inner = Watcher_Recursive{
-		callback    = glob_inner_callback,
+		callback    = proc (e: ^Event) {/* noop */},
 		path        = p,
 		running     = true,
 		user_data   = rawptr(w),
@@ -360,7 +360,8 @@ watch_glob :: proc(pattern: string, cb: Event_Callback, allocator := context.all
 		return nil, e
 	}
 	w.matched_files = make(map[string]bool, allocator)
-	glob_initial_scan(w)
+    // initial scan
+	glob_scan_dir(w, w.inner.path)
 	return w, .None
 }
 

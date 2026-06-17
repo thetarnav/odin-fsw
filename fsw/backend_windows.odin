@@ -1,7 +1,7 @@
 // backend_windows.odin — Windows backend using ReadDirectoryChangesW + IOCP.
 //
-// Platform-specific backend compiled only on Windows (Odin's _os suffix convention).
-// Implements all 7 backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
+// Platform-specific backend compiled only on Windows.
+// Implements all backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
 //
 // Architecture:
 //   - Directories are opened with CreateFileW(FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OVERLAPPED)
