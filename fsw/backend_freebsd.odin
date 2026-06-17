@@ -295,15 +295,15 @@ freebsd_rec_thread :: proc(t: ^thread.Thread) {
 					if !ok {
 						fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
 						if join_err != nil { continue }
+						// Auto-watch new subdirs BEFORE emitting event to avoid race
+						if fi.is_dir {
+							freebsd_rec_add_watch(w, fullpath)
+						}
 						e := Event{kind = .Added, path = fullpath, is_dir = fi.is_dir}
 						if gw != nil {
 							glob_filter_event(gw, &e)
 						} else {
 							invoke_callback_rec(w, &e)
-						}
-						// Auto-watch new subdirs
-						if fi.is_dir {
-							freebsd_rec_add_watch(w, fullpath)
 						}
 					} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
 						fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)

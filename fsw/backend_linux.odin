@@ -268,6 +268,10 @@ inotify_rec_thread :: proc(t: ^thread.Thread) {
 					path, _ = filepath.join({dir_path, name}, context.temp_allocator)
 				}
 				is_dir := .ISDIR in event.mask
+				// Auto-watch new subdirs BEFORE emitting event to avoid race
+				if kind == .Added && is_dir {
+					rec_add_watch(w, path)
+				}
 				e := Event{
 					kind   = kind,
 					path   = path,
@@ -277,9 +281,6 @@ inotify_rec_thread :: proc(t: ^thread.Thread) {
 					glob_filter_event(gw, &e)
 				} else {
 					invoke_callback_rec(w, &e)
-				}
-				if kind == .Added && is_dir {
-					rec_add_watch(w, path)
 				}
 			}
 			offset += size_of(linux.Inotify_Event) + int(event.len)
