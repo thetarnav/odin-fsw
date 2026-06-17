@@ -112,13 +112,13 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 	for path in old {
 		if _, ok := w.matched_files[path]; !ok {
 			e := Event{kind = .Removed, path = path}
-			w.callback(&e)
+			invoke_callback_glob(w, &e)
 		}
 	}
 	for path in w.matched_files {
 		if _, ok := old[path]; !ok {
 			e := Event{kind = .Added, path = path}
-			w.callback(&e)
+			invoke_callback_glob(w, &e)
 		}
 	}
 	for path in old {
@@ -141,24 +141,24 @@ glob_filter_event :: proc(gw: ^Watcher_Glob, event: ^Event) {
 			path_clone := strings.clone(event.path, gw.allocator)
 			gw.matched_files[path_clone] = true
 			e := Event{kind = .Added, path = path_clone}
-			gw.callback(&e)
+			invoke_callback_glob(gw, &e)
 		}
 	case .Removed:
 		if _, ok := gw.matched_files[event.path]; ok {
 			delete_key(&gw.matched_files, event.path)
 			e := Event{kind = .Removed, path = event.path}
-			gw.callback(&e)
+			invoke_callback_glob(gw, &e)
 		}
 	case .Modified:
 		if _, ok := gw.matched_files[event.path]; ok {
 			e := Event{kind = .Modified, path = event.path}
-			gw.callback(&e)
+			invoke_callback_glob(gw, &e)
 		}
 	case .Renamed:
 		if _, ok := gw.matched_files[event.path]; ok {
 			delete_key(&gw.matched_files, event.path)
 			e := Event{kind = .Removed, path = event.path}
-			gw.callback(&e)
+			invoke_callback_glob(gw, &e)
 		}
 	case:
 	}

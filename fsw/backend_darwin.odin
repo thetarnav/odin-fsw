@@ -82,7 +82,7 @@ darwin_file_thread :: proc(t: ^thread.Thread) {
 			if fflags == {} { continue }
 			kind := kq_normalize(fflags)
 			e := Event{kind = kind, path = w.path}
-			w.callback(&e)
+			invoke_callback_file(w, &e)
 		}
 	}
 }
@@ -150,7 +150,7 @@ darwin_dir_thread :: proc(t: ^thread.Thread) {
 			if fflags == {} { continue }
 			kind := kq_normalize(fflags)
 			e := Event{kind = kind, path = w.path, is_dir = true}
-			w.callback(&e)
+			invoke_callback_dir(w, &e)
 		}
 	}
 }
@@ -252,7 +252,7 @@ darwin_rec_thread :: proc(t: ^thread.Thread) {
 			if gw != nil {
 				glob_filter_event(gw, &e)
 			} else {
-				w.callback(&e)
+				invoke_callback_rec(w, &e)
 			}
 
 			if kind == .Added {

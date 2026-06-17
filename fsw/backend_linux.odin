@@ -96,7 +96,7 @@ inotify_file_thread :: proc(t: ^thread.Thread) {
 					path   = path,
 					is_dir = .ISDIR in event.mask,
 				}
-				w.callback(&e)
+				invoke_callback_file(w, &e)
 			}
 			offset += size_of(linux.Inotify_Event) + int(event.len)
 		}
@@ -163,7 +163,7 @@ inotify_dir_thread :: proc(t: ^thread.Thread) {
 					path   = path,
 					is_dir = .ISDIR in event.mask,
 				}
-				w.callback(&e)
+				invoke_callback_dir(w, &e)
 			}
 			offset += size_of(linux.Inotify_Event) + int(event.len)
 		}
@@ -261,7 +261,7 @@ inotify_rec_thread :: proc(t: ^thread.Thread) {
 				if gw != nil {
 					glob_filter_event(gw, &e)
 				} else {
-					w.callback(&e)
+					invoke_callback_rec(w, &e)
 				}
 				if kind == .Added && is_dir {
 					rec_add_watch(w, path)

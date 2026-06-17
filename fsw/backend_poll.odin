@@ -10,7 +10,7 @@ poll_file_thread :: proc(t: ^thread.Thread) {
 		if err != .None {
 			if w.prev.size >= 0 {
 				e := Event{kind = .Removed, path = w.path}
-				w.callback(&e)
+				invoke_callback_file_poll(w, &e)
 				w.prev = File_Info{size = -1}
 			}
 			time.sleep(w.latency)
@@ -18,7 +18,7 @@ poll_file_thread :: proc(t: ^thread.Thread) {
 		}
 		if w.prev.size < 0 {
 			e := Event{kind = .Added, path = w.path}
-			w.callback(&e)
+			invoke_callback_file_poll(w, &e)
 			w.prev = fi
 			time.sleep(w.latency)
 			continue
@@ -30,7 +30,7 @@ poll_file_thread :: proc(t: ^thread.Thread) {
 				kind = .Renamed
 			}
 			e := Event{kind = kind, path = w.path}
-			w.callback(&e)
+			invoke_callback_file_poll(w, &e)
 			w.prev = fi
 		}
 		time.sleep(w.latency)
@@ -46,7 +46,7 @@ poll_dir_thread :: proc(t: ^thread.Thread) {
 		for path in w.prev {
 			if _, ok := current[path]; !ok {
 				e := Event{kind = .Removed, path = path}
-				w.callback(&e)
+				invoke_callback_dir_poll(w, &e)
 			}
 		}
 
@@ -54,10 +54,10 @@ poll_dir_thread :: proc(t: ^thread.Thread) {
 			prev, ok := w.prev[path]
 			if !ok {
 				e := Event{kind = .Added, path = path, is_dir = fi.is_dir}
-				w.callback(&e)
+				invoke_callback_dir_poll(w, &e)
 			} else if fi.mtime != prev.mtime || fi.size != prev.size {
 				e := Event{kind = .Modified, path = path, is_dir = fi.is_dir}
-				w.callback(&e)
+				invoke_callback_dir_poll(w, &e)
 			}
 		}
 
@@ -76,7 +76,7 @@ poll_rec_thread :: proc(t: ^thread.Thread) {
 		for path in w.prev {
 			if _, ok := current[path]; !ok {
 				e := Event{kind = .Removed, path = path}
-				w.callback(&e)
+				invoke_callback_rec_poll(w, &e)
 			}
 		}
 
@@ -84,10 +84,10 @@ poll_rec_thread :: proc(t: ^thread.Thread) {
 			prev, ok := w.prev[path]
 			if !ok {
 				e := Event{kind = .Added, path = path, is_dir = fi.is_dir}
-				w.callback(&e)
+				invoke_callback_rec_poll(w, &e)
 			} else if fi.mtime != prev.mtime || fi.size != prev.size {
 				e := Event{kind = .Modified, path = path, is_dir = fi.is_dir}
-				w.callback(&e)
+				invoke_callback_rec_poll(w, &e)
 			}
 		}
 

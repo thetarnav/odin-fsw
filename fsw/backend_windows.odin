@@ -127,9 +127,9 @@ win_file_thread :: proc(t: ^thread.Thread) {
 			for {
 				name := fni_name(entry)
 				if name == target {
-					kind := action_normalize(entry.action)
-					e := Event{kind = kind, path = w.path}
-					w.callback(&e)
+				kind := action_normalize(entry.action)
+				e := Event{kind = kind, path = w.path}
+				invoke_callback_file(w, &e)
 				}
 				if entry.next_entry_offset == 0 { break }
 				entry = cast(^windows.FILE_NOTIFY_INFORMATION)(uintptr(rawptr(entry)) + uintptr(entry.next_entry_offset))
@@ -225,7 +225,7 @@ win_dir_thread :: proc(t: ^thread.Thread) {
 				fullpath = joined
 			}
 			e := Event{kind = kind, path = fullpath}
-			w.callback(&e)
+			invoke_callback_dir(w, &e)
 				if entry.next_entry_offset == 0 { break }
 				entry = cast(^windows.FILE_NOTIFY_INFORMATION)(uintptr(rawptr(entry)) + uintptr(entry.next_entry_offset))
 			}
@@ -331,7 +331,7 @@ win_rec_thread :: proc(t: ^thread.Thread) {
 			if gw != nil {
 					glob_filter_event(gw, &e)
 				} else {
-					w.callback(&e)
+					invoke_callback_rec(w, &e)
 				}
 				if entry.next_entry_offset == 0 { break }
 				entry = cast(^windows.FILE_NOTIFY_INFORMATION)(uintptr(rawptr(entry)) + uintptr(entry.next_entry_offset))

@@ -1,5 +1,6 @@
 package fsw
 
+import "base:runtime"
 import "core:mem"
 import "core:path/filepath"
 import "core:thread"
@@ -9,67 +10,73 @@ import "core:time"
 
 // Single file — native.
 Watcher_File :: struct {
-	callback:      Event_Callback,
-	path:          string,
-	running:       bool,
+	callback:    Event_Callback,
+	path:        string,
+	running:     bool,
 	native_handle: int,
-	thread:        ^thread.Thread,
-	allocator:     mem.Allocator,
+	thread:      ^thread.Thread,
+	caller_ctx:  runtime.Context,
+	allocator:   mem.Allocator,
 }
 
 // Non-recursive directory — native.
 Watcher_Dir :: struct {
-	callback:      Event_Callback,
-	path:          string,
-	running:       bool,
+	callback:    Event_Callback,
+	path:        string,
+	running:     bool,
 	native_handle: int,
-	thread:        ^thread.Thread,
-	allocator:     mem.Allocator,
+	thread:      ^thread.Thread,
+	caller_ctx:  runtime.Context,
+	allocator:   mem.Allocator,
 }
 
 // Recursive directory — native. Allocates map.
 Watcher_Recursive :: struct {
-	callback:      Event_Callback,
-	path:          string,
-	running:       bool,
+	callback:    Event_Callback,
+	path:        string,
+	running:     bool,
 	native_handle: int,
-	watches:       map[int]string,
-	thread:        ^thread.Thread,
-	user_data:     rawptr,
-	allocator:     mem.Allocator,
+	watches:     map[int]string,
+	thread:      ^thread.Thread,
+	user_data:   rawptr,
+	caller_ctx:  runtime.Context,
+	allocator:   mem.Allocator,
 }
 
 // Single file — polling. Inline snapshot.
 Watcher_File_Poll :: struct {
-	callback:  Event_Callback,
-	path:      string,
-	running:   bool,
-	latency:   time.Duration,
-	prev:      File_Info,
-	thread:    ^thread.Thread,
-	allocator: mem.Allocator,
+	callback:   Event_Callback,
+	path:       string,
+	running:    bool,
+	latency:    time.Duration,
+	prev:       File_Info,
+	thread:     ^thread.Thread,
+	caller_ctx: runtime.Context,
+	allocator:  mem.Allocator,
 }
 
 // Non-recursive directory — polling. Allocates file map.
 Watcher_Dir_Poll :: struct {
-	callback:  Event_Callback,
-	path:      string,
-	running:   bool,
-	latency:   time.Duration,
-	prev:      map[string]File_Info,
-	thread:    ^thread.Thread,
-	allocator: mem.Allocator,
+	callback:   Event_Callback,
+	path:       string,
+	running:    bool,
+	latency:    time.Duration,
+	prev:       map[string]File_Info,
+	thread:     ^thread.Thread,
+	caller_ctx: runtime.Context,
+	allocator:  mem.Allocator,
 }
 
 // Recursive directory — polling. Allocates file map + subdir tracking.
 Watcher_Recursive_Poll :: struct {
-	callback:  Event_Callback,
-	path:      string,
-	running:   bool,
-	latency:   time.Duration,
-	prev:      map[string]File_Info,
-	thread:    ^thread.Thread,
-	allocator: mem.Allocator,
+	callback:   Event_Callback,
+	path:       string,
+	running:    bool,
+	latency:    time.Duration,
+	prev:       map[string]File_Info,
+	thread:     ^thread.Thread,
+	caller_ctx: runtime.Context,
+	allocator:  mem.Allocator,
 }
 
 // Glob — watches directory recursively, filters by glob pattern.
@@ -79,6 +86,7 @@ Watcher_Glob :: struct {
 	running:       bool,
 	matched_files: map[string]bool,
 	inner:         Watcher_Recursive,
+	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
 }
 
@@ -94,6 +102,46 @@ Watcher :: union {
 	^Watcher_Glob,
 }
 
+// === Context-restoring callback invocation ===
+// Threads don't inherit the caller's context. Each watcher saves
+// the caller's context at construction time. These helpers restore
+// it before invoking the user callback.
+
+invoke_callback_file :: proc(w: ^Watcher_File, e: ^Event) {
+	context = w.caller_ctx
+	w.callback(e)
+}
+
+invoke_callback_dir :: proc(w: ^Watcher_Dir, e: ^Event) {
+	context = w.caller_ctx
+	w.callback(e)
+}
+
+invoke_callback_rec :: proc(w: ^Watcher_Recursive, e: ^Event) {
+	context = w.caller_ctx
+	w.callback(e)
+}
+
+invoke_callback_file_poll :: proc(w: ^Watcher_File_Poll, e: ^Event) {
+	context = w.caller_ctx
+	w.callback(e)
+}
+
+invoke_callback_dir_poll :: proc(w: ^Watcher_Dir_Poll, e: ^Event) {
+	context = w.caller_ctx
+	w.callback(e)
+}
+
+invoke_callback_rec_poll :: proc(w: ^Watcher_Recursive_Poll, e: ^Event) {
+	context = w.caller_ctx
+	w.callback(e)
+}
+
+invoke_callback_glob :: proc(w: ^Watcher_Glob, e: ^Event) {
+	context = w.caller_ctx
+	w.callback(e)
+}
+
 // === Constructors — all heap-allocate, return pointers ===
 
 watch_file :: proc(path: string, cb: Event_Callback, allocator := context.allocator) -> (^Watcher_File, Error) {
@@ -106,10 +154,11 @@ watch_file :: proc(path: string, cb: Event_Callback, allocator := context.alloca
 		return nil, .Backend_Init_Failed
 	}
 	w^ = Watcher_File{
-		callback  = cb,
-		path      = p,
-		running   = true,
-		allocator = allocator,
+		callback    = cb,
+		path        = p,
+		running     = true,
+		caller_ctx  = context,
+		allocator   = allocator,
 	}
 	e := backend_file_init(w)
 	if e != .None {
@@ -129,10 +178,11 @@ watch_dir :: proc(path: string, cb: Event_Callback, allocator := context.allocat
 		return nil, .Backend_Init_Failed
 	}
 	w^ = Watcher_Dir{
-		callback  = cb,
-		path      = p,
-		running   = true,
-		allocator = allocator,
+		callback    = cb,
+		path        = p,
+		running     = true,
+		caller_ctx  = context,
+		allocator   = allocator,
 	}
 	e := backend_dir_init(w)
 	if e != .None {
@@ -152,10 +202,11 @@ watch_dir_recursive :: proc(path: string, cb: Event_Callback, allocator := conte
 		return nil, .Backend_Init_Failed
 	}
 	w^ = Watcher_Recursive{
-		callback  = cb,
-		path      = p,
-		running   = true,
-		allocator = allocator,
+		callback    = cb,
+		path        = p,
+		running     = true,
+		caller_ctx  = context,
+		allocator   = allocator,
 	}
 	e := backend_rec_init(w)
 	if e != .None {
@@ -179,12 +230,13 @@ watch_file_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration
 		return nil, .Backend_Init_Failed
 	}
 	w^ = Watcher_File_Poll{
-		callback  = cb,
-		path      = p,
-		running   = true,
-		latency   = latency,
-		prev      = fi,
-		allocator = allocator,
+		callback    = cb,
+		path        = p,
+		running     = true,
+		latency     = latency,
+		prev        = fi,
+		caller_ctx  = context,
+		allocator   = allocator,
 	}
 	w.thread = start_poll_file_thread(w)
 	return w, .None
@@ -202,12 +254,13 @@ watch_dir_poll :: proc(path: string, cb: Event_Callback, latency: time.Duration,
 		return nil, .Backend_Init_Failed
 	}
 	w^ = Watcher_Dir_Poll{
-		callback  = cb,
-		path      = p,
-		running   = true,
-		latency   = latency,
-		prev      = prev,
-		allocator = allocator,
+		callback    = cb,
+		path        = p,
+		running     = true,
+		latency     = latency,
+		prev        = prev,
+		caller_ctx  = context,
+		allocator   = allocator,
 	}
 	w.thread = start_poll_dir_thread(w)
 	return w, .None
@@ -225,12 +278,13 @@ watch_dir_poll_recursive :: proc(path: string, cb: Event_Callback, latency: time
 		return nil, .Backend_Init_Failed
 	}
 	w^ = Watcher_Recursive_Poll{
-		callback  = cb,
-		path      = p,
-		running   = true,
-		latency   = latency,
-		prev      = prev,
-		allocator = allocator,
+		callback    = cb,
+		path        = p,
+		running     = true,
+		latency     = latency,
+		prev        = prev,
+		caller_ctx  = context,
+		allocator   = allocator,
 	}
 	w.thread = start_poll_rec_thread(w)
 	return w, .None
@@ -247,16 +301,18 @@ watch_glob :: proc(pattern: string, cb: Event_Callback, allocator := context.all
 		return nil, .Backend_Init_Failed
 	}
 	w^ = Watcher_Glob{
-		callback  = cb,
-		pattern   = pat,
-		allocator = allocator,
+		callback    = cb,
+		pattern     = pat,
+		caller_ctx  = context,
+		allocator   = allocator,
 	}
 	w.inner = Watcher_Recursive{
-		callback  = glob_inner_callback,
-		path      = p,
-		running   = true,
-		user_data = rawptr(w),
-		allocator = allocator,
+		callback    = glob_inner_callback,
+		path        = p,
+		running     = true,
+		user_data   = rawptr(w),
+		caller_ctx  = context,
+		allocator   = allocator,
 	}
 	e := backend_rec_init(&w.inner)
 	if e != .None {
