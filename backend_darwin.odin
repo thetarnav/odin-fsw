@@ -49,7 +49,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 		flags  = {.Add, .Clear},
 	}
 	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
-	n, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
+	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE {
 		posix.close(kq)
 		os.close(file)
@@ -221,7 +221,6 @@ backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 }
 
 backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
-	kq := posix.FD(w.native_handle)
 	for fd_key in w.watches {
 		posix.close(posix.FD(fd_key))
 	}

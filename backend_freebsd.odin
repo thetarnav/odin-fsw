@@ -210,7 +210,6 @@ backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 }
 
 backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
-	kq := posix.FD(w.native_handle)
 	for fd_key in w.watches {
 		posix.close(posix.FD(fd_key))
 	}

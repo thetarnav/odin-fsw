@@ -16,7 +16,6 @@
 
 package fsw
 
-import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:sys/windows"
