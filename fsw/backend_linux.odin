@@ -213,16 +213,16 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	cs := to_cstring(dir)
 	wd, errno := linux.inotify_add_watch(linux.Fd(w.native_handle), cs, INOTIFY_MASK)
-	if errno != .NONE { return }
-	w.watches[int(wd)] = dir
+	if errno != .NONE do return
 
-	entries, err := os.read_all_directory_by_path(dir, w.allocator)
-	if err != nil { return }
+	w.watches[int(wd)] = strings.clone(dir, w.allocator)
+
+	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if read_err != nil do return
 	for entry in entries {
-		if entry.name == "." || entry.name == ".." { continue }
+		if entry.name == "." || entry.name == ".." do continue
 		if entry.type == .Directory {
-			subdir, join_err := filepath.join({dir, entry.name}, w.allocator)
-			if join_err != nil { continue }
+			subdir := filepath.join({dir, entry.name}, context.temp_allocator) or_continue
 			rec_add_watch(w, subdir)
 		}
 	}

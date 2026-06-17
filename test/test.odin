@@ -304,7 +304,7 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 
 	w, err := fsw.watch_dir_recursive(dir, collector_cb)
 	testing.expectf(t, err == .None, "watch_dir_recursive error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer fsw.destroy(w)
 
 	time.sleep(100 * time.Millisecond)

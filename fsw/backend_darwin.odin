@@ -5,6 +5,7 @@ package fsw
 
 import "core:os"
 import "core:path/filepath"
+import "core:strings"
 import "core:sys/kqueue"
 import "core:sys/posix"
 import "core:thread"
@@ -212,16 +213,15 @@ darwin_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 		return
 	}
 
-	w.watches[fd] = dir
+	w.watches[fd] = strings.clone(dir, w.allocator)
 
-	entries, read_err := os.read_all_directory_by_path(dir, w.allocator)
-	if read_err != nil { return }
+	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if read_err != nil do return
 	for entry in entries {
-		if entry.name == "." || entry.name == ".." { continue }
+		if entry.name == "." || entry.name == ".." do continue
 		if entry.type == .Directory {
-			subdir, join_err := filepath.join({dir, entry.name}, w.allocator)
-			if join_err != nil { continue }
-			darwin_rec_add_watch(w, subdir)
+			subdir := filepath.join({dir, entry.name}, context.temp_allocator) or_continue
+            darwin_rec_add_watch(w, subdir)
 		}
 	}
 }

@@ -26,11 +26,11 @@ file_stat :: proc(path: string) -> (fi: File_Info, err: Error) {
 }
 
 snapshot_dir :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
-	entries, err := os.read_all_directory_by_path(dir, allocator)
-	if err != nil { return }
+	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if err != nil do return
 	for entry in entries {
-		if entry.name == "." || entry.name == ".." { continue }
-		fullpath := filepath.join({dir, entry.name}, allocator) or_continue
+		if entry.name == "." || entry.name == ".." do continue
+		fullpath := filepath.join({dir, entry.name}, context.temp_allocator) or_continue
 		prev[fullpath] = File_Info{
 			is_dir = entry.type == .Directory,
 			size   = entry.size,
@@ -43,12 +43,12 @@ snapshot_dir :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Al
 snapshot_recursive :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
 	snapshot_dir(dir, prev, allocator)
 	// Snapshot subdirs
-	entries, err := os.read_all_directory_by_path(dir, allocator)
-	if err != nil { return }
+	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if err != nil do return
 	for entry in entries {
-		if entry.name == "." || entry.name == ".." { continue }
+		if entry.name == "." || entry.name == ".." do continue
 		if entry.type == .Directory {
-			subdir := filepath.join({dir, entry.name}, allocator) or_continue
+			subdir := filepath.join({dir, entry.name}, context.temp_allocator) or_continue
 			snapshot_recursive(subdir, prev, allocator)
 		}
 	}

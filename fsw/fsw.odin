@@ -303,6 +303,7 @@ watch_glob :: proc(pattern: string, cb: Event_Callback, allocator := context.all
 	w^ = Watcher_Glob{
 		callback    = cb,
 		pattern     = pat,
+		running     = true,
 		caller_ctx  = context,
 		allocator   = allocator,
 	}
@@ -394,6 +395,7 @@ destroy_glob :: proc(w: ^Watcher_Glob) {
 	w.running = false
 	w.inner.running = false
 	backend_rec_destroy(&w.inner)
+    delete(w.inner.path)
 	for _, v in w.inner.watches {
 		delete(v, w.allocator)
 	}
@@ -402,8 +404,6 @@ destroy_glob :: proc(w: ^Watcher_Glob) {
 		delete(path, w.allocator)
 	}
 	delete(w.matched_files)
-	delete(w.inner.path, w.allocator)
-	delete(w.pattern, w.allocator)
 	free(w, w.allocator)
 }
 

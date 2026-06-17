@@ -99,21 +99,21 @@ poll_rec_thread :: proc(t: ^thread.Thread) {
 
 start_poll_file_thread :: proc(w: ^Watcher_File_Poll) -> ^thread.Thread {
 	t := thread.create(poll_file_thread)
-	t.data = rawptr(w)
+	t.data = w
 	thread.start(t)
 	return t
 }
 
 start_poll_dir_thread :: proc(w: ^Watcher_Dir_Poll) -> ^thread.Thread {
 	t := thread.create(poll_dir_thread)
-	t.data = rawptr(w)
+	t.data = w
 	thread.start(t)
 	return t
 }
 
 start_poll_rec_thread :: proc(w: ^Watcher_Recursive_Poll) -> ^thread.Thread {
 	t := thread.create(poll_rec_thread)
-	t.data = rawptr(w)
+	t.data = w
 	thread.start(t)
 	return t
 }

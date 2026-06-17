@@ -83,13 +83,13 @@ glob_initial_scan :: proc(w: ^Watcher_Glob) {
 }
 
 glob_scan_dir :: proc(w: ^Watcher_Glob, dir: string) {
-	entries, err := os.read_all_directory_by_path(dir, w.allocator)
-	if err != nil { return }
+	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if err != nil do return
 	for entry in entries {
-		if entry.name == "." || entry.name == ".." { continue }
+		if entry.name == "." || entry.name == ".." do continue
 		fullpath, join_err := filepath.join({dir, entry.name}, w.allocator)
-		if join_err != nil { continue }
-		rel, rel_err := filepath.rel(w.inner.path, fullpath)
+		if join_err != nil do continue
+		rel, rel_err := filepath.rel(w.inner.path, fullpath, context.temp_allocator)
 		if rel_err != nil {
 			delete(fullpath, w.allocator)
 			continue
@@ -133,7 +133,7 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 
 glob_filter_event :: proc(gw: ^Watcher_Glob, event: ^Event) {
 	rel, rel_err := filepath.rel(gw.inner.path, event.path, context.temp_allocator)
-	if rel_err != nil { return }
+	if rel_err != nil do return
 
 	#partial switch event.kind {
 	case .Added:
@@ -144,10 +144,14 @@ glob_filter_event :: proc(gw: ^Watcher_Glob, event: ^Event) {
 			invoke_callback_glob(gw, &e)
 		}
 	case .Removed:
-		if _, ok := gw.matched_files[event.path]; ok {
-			delete_key(&gw.matched_files, event.path)
-			e := Event{kind = .Removed, path = event.path}
-			invoke_callback_glob(gw, &e)
+		for key in gw.matched_files {
+			if key == event.path {
+				delete_key(&gw.matched_files, key)
+				delete(key, gw.allocator)
+				e := Event{kind = .Removed, path = event.path}
+				invoke_callback_glob(gw, &e)
+				break
+			}
 		}
 	case .Modified:
 		if _, ok := gw.matched_files[event.path]; ok {
@@ -155,10 +159,14 @@ glob_filter_event :: proc(gw: ^Watcher_Glob, event: ^Event) {
 			invoke_callback_glob(gw, &e)
 		}
 	case .Renamed:
-		if _, ok := gw.matched_files[event.path]; ok {
-			delete_key(&gw.matched_files, event.path)
-			e := Event{kind = .Removed, path = event.path}
-			invoke_callback_glob(gw, &e)
+		for key in gw.matched_files {
+			if key == event.path {
+				delete_key(&gw.matched_files, key)
+				delete(key, gw.allocator)
+				e := Event{kind = .Removed, path = event.path}
+				invoke_callback_glob(gw, &e)
+				break
+			}
 		}
 	case:
 	}
