@@ -249,8 +249,7 @@ inotify_rec_thread :: proc(t: ^thread.Thread) {
 				kind := inotify_normalize(event.mask)
 				path := dir_path
 				if name != "" {
-					joined, _ := filepath.join({dir_path, name}, context.temp_allocator)
-					path = joined
+					path, _ = filepath.join({dir_path, name}, context.temp_allocator)
 				}
 				is_dir := .ISDIR in event.mask
 				e := Event{

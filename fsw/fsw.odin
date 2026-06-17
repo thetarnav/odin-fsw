@@ -10,24 +10,24 @@ import "core:time"
 
 // Single file — native.
 Watcher_File :: struct {
-	callback:    Event_Callback,
-	path:        string,
-	running:     bool,
+	callback:      Event_Callback,
+	path:          string,
+	running:       bool,
 	native_handle: int,
-	thread:      ^thread.Thread,
-	caller_ctx:  runtime.Context,
-	allocator:   mem.Allocator,
+	thread:        ^thread.Thread,
+	caller_ctx:    runtime.Context,
+	allocator:     mem.Allocator,
 }
 
 // Non-recursive directory — native.
 Watcher_Dir :: struct {
-	callback:    Event_Callback,
-	path:        string,
-	running:     bool,
+	callback:      Event_Callback,
+	path:          string,
+	running:       bool,
 	native_handle: int,
-	thread:      ^thread.Thread,
-	caller_ctx:  runtime.Context,
-	allocator:   mem.Allocator,
+	thread:        ^thread.Thread,
+	caller_ctx:    runtime.Context,
+	allocator:     mem.Allocator,
 }
 
 // Recursive directory — native. Allocates map.
@@ -36,11 +36,11 @@ Watcher_Recursive :: struct {
 	path:        string,
 	running:     bool,
 	native_handle: int,
-	watches:     map[int]string,
-	thread:      ^thread.Thread,
-	user_data:   rawptr,
-	caller_ctx:  runtime.Context,
-	allocator:   mem.Allocator,
+	watches:       map[int]string,
+	thread:        ^thread.Thread,
+	user_data:     rawptr,
+	caller_ctx:    runtime.Context,
+	allocator:     mem.Allocator,
 }
 
 // Single file — polling. Inline snapshot.
@@ -111,32 +111,26 @@ invoke_callback_file :: proc(w: ^Watcher_File, e: ^Event) {
 	context = w.caller_ctx
 	w.callback(e)
 }
-
 invoke_callback_dir :: proc(w: ^Watcher_Dir, e: ^Event) {
 	context = w.caller_ctx
 	w.callback(e)
 }
-
 invoke_callback_rec :: proc(w: ^Watcher_Recursive, e: ^Event) {
 	context = w.caller_ctx
 	w.callback(e)
 }
-
 invoke_callback_file_poll :: proc(w: ^Watcher_File_Poll, e: ^Event) {
 	context = w.caller_ctx
 	w.callback(e)
 }
-
 invoke_callback_dir_poll :: proc(w: ^Watcher_Dir_Poll, e: ^Event) {
 	context = w.caller_ctx
 	w.callback(e)
 }
-
 invoke_callback_rec_poll :: proc(w: ^Watcher_Recursive_Poll, e: ^Event) {
 	context = w.caller_ctx
 	w.callback(e)
 }
-
 invoke_callback_glob :: proc(w: ^Watcher_Glob, e: ^Event) {
 	context = w.caller_ctx
 	w.callback(e)
@@ -408,14 +402,16 @@ destroy_glob :: proc(w: ^Watcher_Glob) {
 }
 
 destroy_watcher :: proc(w: ^Watcher) {
-	if w == nil { return }
-	if v, ok := w^.(^Watcher_File); ok { destroy_file(v); return }
-	if v, ok := w^.(^Watcher_Dir); ok { destroy_dir(v); return }
-	if v, ok := w^.(^Watcher_Recursive); ok { destroy_rec(v); return }
-	if v, ok := w^.(^Watcher_File_Poll); ok { destroy_file_poll(v); return }
-	if v, ok := w^.(^Watcher_Dir_Poll); ok { destroy_dir_poll(v); return }
-	if v, ok := w^.(^Watcher_Recursive_Poll); ok { destroy_rec_poll(v); return }
-	if v, ok := w^.(^Watcher_Glob); ok { destroy_glob(v); return }
+	if w == nil do return
+    switch v in w {
+    case ^Watcher_File:           destroy_file(v)
+    case ^Watcher_Dir:            destroy_dir(v)
+    case ^Watcher_Recursive:      destroy_rec(v)
+    case ^Watcher_File_Poll:      destroy_file_poll(v)
+    case ^Watcher_Dir_Poll:       destroy_dir_poll(v)
+    case ^Watcher_Recursive_Poll: destroy_rec_poll(v)
+    case ^Watcher_Glob:           destroy_glob(v)
+    }
 }
 
 destroy :: proc {
@@ -450,10 +446,12 @@ rescan_glob :: proc(w: ^Watcher_Glob) -> Error {
 }
 
 rescan_watcher :: proc(w: ^Watcher) -> Error {
-	if w == nil { return .Invalid_Path }
-	if v, ok := w^.(^Watcher_Recursive); ok { return rescan_rec(v) }
-	if v, ok := w^.(^Watcher_Recursive_Poll); ok { return rescan_rec_poll(v) }
-	if v, ok := w^.(^Watcher_Glob); ok { return rescan_glob(v) }
+	if w == nil do return .Invalid_Path
+    #partial switch v in w {
+    case ^Watcher_Recursive:      return rescan_rec(v)
+    case ^Watcher_Recursive_Poll: return rescan_rec_poll(v)
+    case ^Watcher_Glob:           return rescan_glob(v)
+    }
 	return .None
 }
 
@@ -464,22 +462,3 @@ rescan :: proc {
 	rescan_watcher,
 }
 
-// === Casting helpers ===
-
-as_watcher_file :: proc(w: ^Watcher_File)           -> Watcher { return w }
-as_watcher_dir :: proc(w: ^Watcher_Dir)             -> Watcher { return w }
-as_watcher_rec :: proc(w: ^Watcher_Recursive)       -> Watcher { return w }
-as_watcher_file_poll :: proc(w: ^Watcher_File_Poll) -> Watcher { return w }
-as_watcher_dir_poll :: proc(w: ^Watcher_Dir_Poll)   -> Watcher { return w }
-as_watcher_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Watcher { return w }
-as_watcher_glob :: proc(w: ^Watcher_Glob)           -> Watcher { return w }
-
-as_watcher :: proc {
-	as_watcher_file,
-	as_watcher_dir,
-	as_watcher_rec,
-	as_watcher_file_poll,
-	as_watcher_dir_poll,
-	as_watcher_rec_poll,
-	as_watcher_glob,
-}

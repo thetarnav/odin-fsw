@@ -233,16 +233,16 @@ freebsd_rec_thread :: proc(t: ^thread.Thread) {
 	for w.running {
 		timeout := posix.timespec{tv_sec = 0, tv_nsec = 100_000_000}
 		n, _ := kqueue.kevent(kq, nil, events[:], &timeout)
-		if n <= 0 { continue }
+		if n <= 0 do continue
 
 		for i in 0..<n {
-			if events[i].filter != .VNode { continue }
+			if events[i].filter != .VNode do continue
 			fflags := events[i].fflags.vnode
-			if fflags == {} { continue }
+			if fflags == {} do continue
 
 			fd := int(events[i].ident)
 			dir_path, ok := w.watches[fd]
-			if !ok { continue }
+			if !ok do continue
 
 			kind := kq_normalize(fflags)
 			e := Event{kind = kind, path = dir_path, is_dir = true}

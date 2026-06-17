@@ -198,8 +198,8 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 
 darwin_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	file, err := os.open(dir, os.O_RDONLY)
-	if err != nil { return }
-	fd := int((^os.File_Impl)(file.impl).fd)
+	if err != nil do return
+	fd := (^os.File_Impl)(file.impl).fd
 
 	ev := kqueue.KEvent{
 		ident  = uintptr(fd),
@@ -235,16 +235,16 @@ darwin_rec_thread :: proc(t: ^thread.Thread) {
 	for w.running {
 		timeout := posix.timespec{tv_sec = 0, tv_nsec = 100_000_000}
 		n, _ := kqueue.kevent(kq, nil, events[:], &timeout)
-		if n <= 0 { continue }
+		if n <= 0 do continue
 
 		for i in 0..<n {
-			if events[i].filter != .VNode { continue }
+			if events[i].filter != .VNode do continue
 			fflags := events[i].fflags.vnode
-			if fflags == {} { continue }
+			if fflags == {} do continue
 
 			fd := int(events[i].ident)
 			dir_path, ok := w.watches[fd]
-			if !ok { continue }
+			if !ok do continue
 
 			kind := kq_normalize(fflags)
 			e := Event{kind = kind, path = dir_path, is_dir = true}
