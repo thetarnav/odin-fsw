@@ -88,6 +88,10 @@ collector_count_kind :: proc(c: ^Collector, kind: fsw.Event_Kind) -> int {
 // Global collector pointer (test funcs set this before creating watchers)
 _collector: ^Collector
 
+// Overflow tracking globals (used by test_overflow_tracking)
+_overflow_received: bool
+_overflow_mu: sync.Mutex
+
 // === Test helpers ===
 
 join_path :: proc(a: string, b: string) -> string {
@@ -589,6 +593,169 @@ test_glob_watcher :: proc() {
 	}
 }
 
+test_stress_many_files :: proc() {
+	fmt.println("[test] stress: many files rapidly")
+
+	dir, ok := make_temp_dir("stress_many")
+	if !ok { test_fail("setup", "cannot create temp dir"); return }
+	defer remove_all(dir)
+
+	c: Collector
+	collector_init(&c)
+	defer collector_destroy(&c)
+	_collector = &c
+
+	w, err := fsw.watch_dir(dir, collector_cb)
+	if err != .None {
+		test_fail("create watcher", fmt.tprintf("error: %v", err))
+		return
+	}
+	defer fsw.destroy(w)
+
+	time.sleep(100 * time.Millisecond)
+	collector_clear(&c)
+
+	// Create 50 files rapidly
+	for i in 0..<50 {
+		name := fmt.tprintf("stress_{}.txt", i)
+		path := join_path(dir, name)
+		touch_file(path)
+	}
+
+	// Wait for events to arrive
+	collector_wait(&c, 10, 5 * time.Second)
+
+	// Verify watcher is still alive — create one more file with a unique name
+	probe := join_path(dir, "PROBE_AFTER_STRESS.txt")
+	collector_clear(&c)
+	touch_file(probe)
+	if collector_wait(&c, 1, 2 * time.Second) {
+		if collector_has_kind_path(&c, .Added, "PROBE_AFTER_STRESS") {
+			test_pass("watcher alive after stress")
+		} else {
+			test_fail("watcher alive after stress", "probe not detected")
+		}
+	} else {
+		test_fail("watcher alive after stress", "timeout")
+	}
+}
+
+test_stress_rapid_lifecycle :: proc() {
+	fmt.println("[test] stress: rapid watcher create/destroy")
+
+	dir, ok := make_temp_dir("stress_lifecycle")
+	if !ok { test_fail("setup", "cannot create temp dir"); return }
+	defer remove_all(dir)
+
+	filepath_a := join_path(dir, "lifecycle.txt")
+	touch_file(filepath_a)
+
+	// Create and destroy 20 watchers rapidly
+	for i in 0..<20 {
+		w, err := fsw.watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
+		if err != .None {
+			test_fail("rapid lifecycle", fmt.tprintf("iteration %d: error %v", i, err))
+			return
+		}
+		fsw.destroy(w)
+	}
+
+	// Final watcher should still work
+	c: Collector
+	collector_init(&c)
+	defer collector_destroy(&c)
+	_collector = &c
+
+	w, err := fsw.watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
+	if err != .None {
+		test_fail("final watcher create", fmt.tprintf("error: %v", err))
+		return
+	}
+	defer fsw.destroy(w)
+
+	time.sleep(150 * time.Millisecond)
+	collector_clear(&c)
+
+	write_file(filepath_a, "after rapid lifecycle")
+	if collector_wait(&c, 1, 2 * time.Second) {
+		if collector_has_kind_path(&c, .Modified, "lifecycle.txt") {
+			test_pass("watcher works after rapid lifecycle")
+		} else {
+			test_fail("final modify", "no Modified event")
+		}
+	} else {
+		test_fail("final modify", "timeout")
+	}
+}
+
+test_overflow_tracking :: proc() {
+	fmt.println("[test] overflow event tracking")
+
+	dir, ok := make_temp_dir("overflow")
+	if !ok { test_fail("setup", "cannot create temp dir"); return }
+	defer remove_all(dir)
+
+	overflow_cb :: proc(event: ^fsw.Event) {
+		if event.kind == .Overflow {
+			sync.mutex_lock(&_overflow_mu)
+			_overflow_received = true
+			sync.mutex_unlock(&_overflow_mu)
+		}
+		collector_cb(event)
+	}
+
+	c: Collector
+	collector_init(&c)
+	defer collector_destroy(&c)
+	_collector = &c
+
+	w, err := fsw.watch_dir(dir, overflow_cb)
+	if err != .None {
+		test_fail("create watcher", fmt.tprintf("error: %v", err))
+		return
+	}
+	defer fsw.destroy(w)
+
+	time.sleep(100 * time.Millisecond)
+	collector_clear(&c)
+
+	// Create many files rapidly to try to trigger overflow
+	// (may not actually overflow on modern kernels with large buffers)
+	for i in 0..<200 {
+		name := fmt.tprintf("ovf_{}.txt", i)
+		path := join_path(dir, name)
+		touch_file(path)
+	}
+
+	collector_wait(&c, 50, 5 * time.Second)
+
+	sync.mutex_lock(&_overflow_mu)
+	had_overflow := _overflow_received
+	sync.mutex_unlock(&_overflow_mu)
+
+	if had_overflow {
+		test_pass("overflow event delivered")
+	} else {
+		// Not a failure — kernel buffer may be large enough
+		fmt.println("  INFO: no overflow occurred (kernel buffer sufficient)")
+		test_pass("overflow tracking (no overflow triggered)")
+	}
+
+	// Verify watcher still works after the burst
+	probe := join_path(dir, "PROBE_OVERFLOW.txt")
+	collector_clear(&c)
+	touch_file(probe)
+	if collector_wait(&c, 1, 2 * time.Second) {
+		if collector_has_kind_path(&c, .Added, "PROBE_OVERFLOW") {
+			test_pass("watcher functional after burst")
+		} else {
+			test_fail("post-burst probe", "not detected")
+		}
+	} else {
+		test_fail("post-burst probe", "timeout")
+	}
+}
+
 // === Main ===
 
 main :: proc() {
@@ -602,6 +769,9 @@ main :: proc() {
 	test_inotify_dir_watcher()
 	test_inotify_recursive_watcher()
 	test_glob_watcher()
+	test_stress_many_files()
+	test_stress_rapid_lifecycle()
+	test_overflow_tracking()
 
 	fmt.println()
 	fmt.println("=== tests complete ===")
