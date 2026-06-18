@@ -1,6 +1,16 @@
 // event_loop_freebsd.odin — Shared kqueue event loop for FreeBSD.
 //
-// Identical architecture to event_loop_darwin.odin — see that file for details.
+// A single kqueue fd multiplexes multiple watcher fds on one background thread.
+// Watchers register their file descriptor(s) with the loop via loop_add_watcher.
+// The loop thread calls kevent and dispatches VNode events to the appropriate
+// watcher type.
+//
+// Thread lifecycle: the thread starts on the first loop_add_watcher call and
+// self-terminates when the last watcher is removed. A new thread is spawned
+// if a watcher is later added to an idle loop.
+//
+// Thread safety: the mutex is held during dispatch AND during add/remove.
+// Callbacks must not call destroy (would deadlock).
 
 package fsw
 
@@ -99,6 +109,15 @@ loop_add_watcher :: proc(loop: ^Event_Loop, fd: int, w: Loop_Watcher) {
 	sync.mutex_unlock(&loop.mu)
 }
 
+// loop_add_rec_fd registers a single new subdirectory fd with the loop
+// (kqueue + dispatch map). Called by the loop thread when kq_dispatch_rec
+// discovers a new subdirectory.
+@(private)
+loop_add_rec_fd :: proc(loop: ^Event_Loop, fd: int, w: ^Watcher_Recursive) {
+	kq_register(loop.kqfd, fd)
+	loop.watchers[posix.FD(fd)] = Loop_Watcher(w)
+}
+
 loop_add_rec_watcher :: proc(loop: ^Event_Loop, w: ^Watcher_Recursive) {
 	sync.mutex_lock(&loop.mu)
 	for fd_key in w.watches {
@@ -165,6 +184,11 @@ loop_remove_rec_watcher :: proc(loop: ^Event_Loop, w: ^Watcher_Recursive) -> boo
 	return false
 }
 
+// dispatched tracks which ^Watcher_Recursive pointers have already been
+// polled in the current loop iteration. A recursive watcher is registered in
+// loop.watchers once per subdirectory fd, so iterating loop.watchers naively
+// would dispatch the same watcher N times. We deduplicate per iter.
+@(private)
 kq_event_loop_thread :: proc(t: ^thread.Thread) {
 	loop := (^Event_Loop)(t.data)
 	events: [64]kqueue.KEvent
@@ -179,6 +203,7 @@ kq_event_loop_thread :: proc(t: ^thread.Thread) {
 			break
 		}
 
+		// Dispatch file watchers directly from kevent ident.
 		if n > 0 {
 			for i in 0..<int(n) {
 				key := posix.FD(int(events[i].ident))
@@ -195,6 +220,9 @@ kq_event_loop_thread :: proc(t: ^thread.Thread) {
 			}
 		}
 
+		// Poll dir + recursive watchers via snapshot diff. Deduplicate
+		// recursive watchers (one entry per fd in loop.watchers).
+		rec_seen: map[^Watcher_Recursive]bool
 		for _, w in loop.watchers {
 			#partial switch ref in w {
 			case ^Watcher_Dir:
@@ -202,11 +230,13 @@ kq_event_loop_thread :: proc(t: ^thread.Thread) {
 					kq_dispatch_dir(ref)
 				}
 			case ^Watcher_Recursive:
-				if ref.running {
-					kq_dispatch_rec(ref)
+				if ref.running && !rec_seen[ref] {
+					rec_seen[ref] = true
+					kq_dispatch_rec(loop, ref)
 				}
 			}
 		}
+		delete(rec_seen)
 
 		sync.mutex_unlock(&loop.mu)
 	}
@@ -242,10 +272,25 @@ kq_dispatch_dir :: proc(w: ^Watcher_Dir) {
 	w.prev = current
 }
 
-kq_dispatch_rec :: proc(w: ^Watcher_Recursive) {
+// kq_dispatch_rec snapshot-diffs every watched subdirectory and emits events.
+// New subdirectories discovered during the diff are collected and registered
+// AFTER the iteration completes (mutating w.watches during the `for` would be
+// undefined behavior).
+//
+// Caller must hold loop.mu.
+kq_dispatch_rec :: proc(loop: ^Event_Loop, w: ^Watcher_Recursive) {
 	gw := (^Watcher_Glob)(w.user_data)
+	new_dirs: [dynamic]string
+	defer delete(new_dirs)
 
-	for _, dir_path in w.watches {
+	// Snapshot dir paths to iterate (avoids mutating w.watches during range).
+	dir_paths := make([dynamic]string, len(w.watches), context.temp_allocator)
+	defer delete(dir_paths)
+	for _, p in w.watches {
+		append(&dir_paths, p)
+	}
+
+	for dir_path in dir_paths {
 		dir_prev, has_prev := w.prev[dir_path]
 
 		current := make(map[string]File_Info, context.temp_allocator)
@@ -271,7 +316,7 @@ kq_dispatch_rec :: proc(w: ^Watcher_Recursive) {
 					fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
 					if join_err != nil { continue }
 					if fi.is_dir {
-						kq_rec_add_watch(w, fullpath)
+						append(&new_dirs, fullpath)
 					}
 					e := Event{kind = .Added, path = fullpath, is_dir = fi.is_dir}
 					if gw != nil {
@@ -296,8 +341,63 @@ kq_dispatch_rec :: proc(w: ^Watcher_Recursive) {
 
 		w.prev[dir_path] = current
 	}
+
+	// Register new subdirs after iteration. Each new dir gets an fd, a
+	// kevent registration, and an entry in loop.watchers so the kqueue
+	// dispatch map stays consistent with the watcher's watches.
+	for dir in new_dirs {
+		kq_register_subdir(loop, w, dir)
+	}
 }
 
+// kq_register_subdir opens `dir`, adds it to w.watches, registers with the
+// shared kqueue, and inserts into loop.watchers. Recurses into existing
+// nested subdirectories. Caller must hold loop.mu.
+@(private)
+kq_register_subdir :: proc(loop: ^Event_Loop, w: ^Watcher_Recursive, dir: string) {
+	already_watched := false
+	for _, p in w.watches {
+		if p == dir { already_watched = true; break }
+	}
+	if already_watched { return }
+
+	file, err := os.open(dir, os.O_RDONLY)
+	if err != nil { return }
+	fd := int(os.fd(file))
+
+	ev := kqueue.KEvent{
+		ident  = uintptr(fd),
+		filter = .VNode,
+		flags  = {.Add, .Clear},
+	}
+	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
+	if _, errno := kqueue.kevent(loop.kqfd, []kqueue.KEvent{ev}, nil, nil); errno != .NONE {
+		os.close(file)
+		return
+	}
+
+	w.watches[fd] = strings.clone(dir, w.allocator)
+	loop.watchers[posix.FD(fd)] = Loop_Watcher(w)
+
+	dir_prev := make(map[string]File_Info, w.allocator)
+	snapshot_dir_by_name(dir, &dir_prev)
+	w.prev[dir] = dir_prev
+
+	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if read_err != nil { return }
+	for entry in entries {
+		if entry.name == "." || entry.name == ".." { continue }
+		if entry.type == .Directory {
+			subdir, join_err := filepath.join({dir, entry.name}, context.temp_allocator)
+			if join_err != nil { continue }
+			kq_register_subdir(loop, w, subdir)
+		}
+	}
+}
+
+// kq_rec_add_watch is the public initializer helper: populates w.watches and
+// w.prev from a starting directory. Called from backend_rec_init under no
+// lock; the caller then calls loop_add_rec_watcher to publish fds to the loop.
 kq_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	file, err := os.open(dir, os.O_RDONLY)
 	if err != nil { return }
