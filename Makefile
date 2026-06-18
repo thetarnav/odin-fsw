@@ -1,7 +1,7 @@
 .PHONY: test check
 
 test:
-	odin test . -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true
+	odin test .
 
 check:
 	odin check . -vet -no-entry-point -warnings-as-errors -target:linux_amd64

@@ -31,7 +31,12 @@ Event_Loop :: struct {
 
 _global_loop: ^Event_Loop
 
+_loop_mu: sync.Mutex
+
 get_loop :: proc() -> ^Event_Loop {
+	if _global_loop != nil { return _global_loop }
+	sync.mutex_lock(&_loop_mu)
+	defer sync.mutex_unlock(&_loop_mu)
 	if _global_loop != nil { return _global_loop }
 	epfd, errno := linux.epoll_create()
 	if errno != .NONE { return nil }
@@ -46,9 +51,14 @@ get_loop :: proc() -> ^Event_Loop {
 }
 
 destroy_loop :: proc() {
-	if _global_loop == nil { return }
+	sync.mutex_lock(&_loop_mu)
+	if _global_loop == nil {
+		sync.mutex_unlock(&_loop_mu)
+		return
+	}
 	loop := _global_loop
 	_global_loop = nil
+	sync.mutex_unlock(&_loop_mu)
 	sync.mutex_lock(&loop.mu)
 	loop.running = false
 	t := loop.thread

@@ -35,6 +35,11 @@ Watcher_File :: struct {
 	thread:        ^thread.Thread, // per-watcher thread (non-Linux backends; unused on Linux)
 	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
+	// Windows IOCP fields (unused on other platforms)
+	event:    rawptr, // windows.HANDLE
+	overlapped: rawptr, // ^windows.OVERLAPPED
+	buf_ptr:  rawptr, // buffer data pointer
+	buf_len:  uintptr,
 }
 
 // Watcher_Dir watches a directory (non-recursive) using the OS-native backend.
@@ -49,6 +54,11 @@ Watcher_Dir :: struct {
 	thread:        ^thread.Thread, // per-watcher thread (non-Linux backends; unused on Linux)
 	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
+	// Windows IOCP fields (unused on other platforms)
+	event:    rawptr,
+	overlapped: rawptr,
+	buf_ptr:  rawptr,
+	buf_len:  uintptr,
 }
 
 // Watcher_Recursive watches a directory and all its subdirectories.
@@ -66,6 +76,11 @@ Watcher_Recursive :: struct {
 	thread:        ^thread.Thread, // per-watcher thread (non-Linux backends; unused on Linux)
 	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
+	// Windows IOCP fields (unused on other platforms)
+	event:    rawptr,
+	overlapped: rawptr,
+	buf_ptr:  rawptr,
+	buf_len:  uintptr,
 }
 
 // Watcher_File_Poll watches a single file by stat-based polling.

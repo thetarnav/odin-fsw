@@ -78,9 +78,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 backend_file_destroy :: proc(w: ^Watcher_File) {
 	loop := get_loop()
 	if loop != nil {
-		if loop_remove_watcher(loop, linux.Fd(w.native_handle)) {
-			destroy_loop()
-		}
+		loop_remove_watcher(loop, linux.Fd(w.native_handle))
 	}
 }
 
@@ -111,9 +109,7 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	loop := get_loop()
 	if loop != nil {
-		if loop_remove_watcher(loop, linux.Fd(w.native_handle)) {
-			destroy_loop()
-		}
+		loop_remove_watcher(loop, linux.Fd(w.native_handle))
 	}
 }
 
@@ -139,9 +135,7 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 	loop := get_loop()
 	if loop != nil {
-		if loop_remove_watcher(loop, linux.Fd(w.native_handle)) {
-			destroy_loop()
-		}
+		loop_remove_watcher(loop, linux.Fd(w.native_handle))
 	}
 }
 
