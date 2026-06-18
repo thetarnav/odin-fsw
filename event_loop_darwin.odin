@@ -14,7 +14,6 @@
 
 package fsw
 
-import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -176,17 +175,6 @@ loop_remove_rec_watcher :: proc(loop: ^Event_Loop, w: ^Watcher_Recursive) -> boo
 	return false
 }
 
-// A pending_fd records a new fd that the loop thread should register with
-// kqueue + loop.watchers after the current dispatch iteration finishes. We
-// collect these during dispatch (so we don't mutate loop.watchers while the
-// caller is iterating it) and apply them in one batch below.
-@(private)
-Pending_FD :: struct {
-	fd:   int,
-	dir:  string,
-	w:    ^Watcher_Recursive,
-}
-
 kq_event_loop_thread :: proc(t: ^thread.Thread) {
 	loop := (^Event_Loop)(t.data)
 	events: [64]kqueue.KEvent
@@ -221,13 +209,10 @@ kq_event_loop_thread :: proc(t: ^thread.Thread) {
 		// Poll dir + recursive watchers via snapshot diff.
 		// A recursive watcher appears once per subdirectory fd in
 		// loop.watchers, so we collect unique pointers first, then dispatch.
-		pending: [dynamic]Pending_FD
-		defer delete(pending)
-		rec_pending: [dynamic]^Watcher_Recursive
-		defer delete(rec_pending)
 		rec_seen: map[^Watcher_Recursive]bool
 		defer delete(rec_seen)
-
+		rec_pending: [dynamic]^Watcher_Recursive
+		defer delete(rec_pending)
 		for _, w in loop.watchers {
 			#partial switch ref in w {
 			case ^Watcher_Dir:
@@ -241,17 +226,8 @@ kq_event_loop_thread :: proc(t: ^thread.Thread) {
 				}
 			}
 		}
-
 		for ref in rec_pending {
-			kq_dispatch_rec(ref, &pending)
-		}
-
-		// Apply new fd registrations collected during dispatch. Doing this
-		// after the loop.watchers iteration avoids the UB of mutating a
-		// map while ranging over it.
-		for p in pending {
-			kq_register(loop.kqfd, p.fd)
-			loop.watchers[posix.FD(p.fd)] = Loop_Watcher(p.w)
+			kq_dispatch_rec(loop, ref)
 		}
 
 		sync.mutex_unlock(&loop.mu)
@@ -289,12 +265,15 @@ kq_dispatch_dir :: proc(w: ^Watcher_Dir) {
 }
 
 // kq_dispatch_rec snapshot-diffs every watched subdirectory and emits events.
-// Caller must hold loop.mu. New subdirs discovered during the diff are
-// collected into `pending` so the loop thread can register them after the
-// loop.watchers iteration completes (mutating loop.watchers or w.watches
-// during a range is undefined behavior).
-kq_dispatch_rec :: proc(w: ^Watcher_Recursive, pending: ^[dynamic]Pending_FD) {
+// New subdirectories discovered during the diff are collected and registered
+// AFTER the iteration completes (mutating w.watches during the `for` would be
+// undefined behavior).
+//
+// Caller must hold loop.mu.
+kq_dispatch_rec :: proc(loop: ^Event_Loop, w: ^Watcher_Recursive) {
 	gw := (^Watcher_Glob)(w.user_data)
+	new_dirs: [dynamic]string
+	defer delete(new_dirs)
 
 	// Snapshot dir paths to iterate (avoids mutating w.watches during range).
 	dir_paths := make([dynamic]string, context.temp_allocator)
@@ -329,15 +308,7 @@ kq_dispatch_rec :: proc(w: ^Watcher_Recursive, pending: ^[dynamic]Pending_FD) {
 					fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
 					if join_err != nil { continue }
 					if fi.is_dir {
-						// Open the new dir now and queue a Pending_FD so the
-						// loop thread can register the kevent and add the fd
-						// to loop.watchers after this iteration completes.
-						if new_fd, opened := kq_open_dir(fullpath, w.allocator); opened {
-							append(pending, Pending_FD{fd = new_fd, dir = fullpath, w = w})
-							w.watches[new_fd] = strings.clone(fullpath, w.allocator)
-							w.prev[fullpath] = make(map[string]File_Info, w.allocator)
-							snapshot_dir_by_name(fullpath, &w.prev[fullpath])
-						}
+						append(&new_dirs, fullpath)
 					}
 					e := Event{kind = .Added, path = fullpath, is_dir = fi.is_dir}
 					if gw != nil {
@@ -362,17 +333,58 @@ kq_dispatch_rec :: proc(w: ^Watcher_Recursive, pending: ^[dynamic]Pending_FD) {
 
 		w.prev[dir_path] = current
 	}
+
+	// Register new subdirs after iteration. Each new dir gets an fd, a
+	// kevent registration, and an entry in loop.watchers so the kqueue
+	// dispatch map stays consistent with the watcher's watches.
+	for dir in new_dirs {
+		kq_register_subdir(loop, w, dir)
+	}
 }
 
-// kq_open_dir opens a directory and returns its raw fd. Allocates a clone of
-// the dir path on `path_alloc` for storage in w.watches. Does NOT register
-// the fd with kqueue or add it to loop.watchers — the loop thread does that
-// after dispatch completes.
+// kq_register_subdir opens `dir`, adds it to w.watches, registers with the
+// shared kqueue, and inserts into loop.watchers. Recurses into existing
+// nested subdirectories. Caller must hold loop.mu.
 @(private)
-kq_open_dir :: proc(dir: string, path_alloc: mem.Allocator) -> (int, bool) {
+kq_register_subdir :: proc(loop: ^Event_Loop, w: ^Watcher_Recursive, dir: string) {
+	already_watched := false
+	for _, p in w.watches {
+		if p == dir { already_watched = true; break }
+	}
+	if already_watched { return }
+
 	file, err := os.open(dir, os.O_RDONLY)
-	if err != nil { return 0, false }
-	return int(os.fd(file)), true
+	if err != nil { return }
+	fd := int(os.fd(file))
+
+	ev := kqueue.KEvent{
+		ident  = uintptr(fd),
+		filter = .VNode,
+		flags  = {.Add, .Clear},
+	}
+	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
+	if _, errno := kqueue.kevent(loop.kqfd, []kqueue.KEvent{ev}, nil, nil); errno != .NONE {
+		os.close(file)
+		return
+	}
+
+	w.watches[fd] = strings.clone(dir, w.allocator)
+	loop.watchers[posix.FD(fd)] = Loop_Watcher(w)
+
+	dir_prev := make(map[string]File_Info, w.allocator)
+	snapshot_dir_by_name(dir, &dir_prev)
+	w.prev[dir] = dir_prev
+
+	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if read_err != nil { return }
+	for entry in entries {
+		if entry.name == "." || entry.name == ".." { continue }
+		if entry.type == .Directory {
+			subdir, join_err := filepath.join({dir, entry.name}, context.temp_allocator)
+			if join_err != nil { continue }
+			kq_register_subdir(loop, w, subdir)
+		}
+	}
 }
 
 // kq_rec_add_watch is the public initializer helper: populates w.watches and
