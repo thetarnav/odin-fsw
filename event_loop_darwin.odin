@@ -183,13 +183,12 @@ kq_event_loop_thread :: proc(t: ^thread.Thread) {
 		timeout := posix.timespec{tv_sec = 0, tv_nsec = 100_000_000}
 		n, _ := kqueue.kevent(loop.kqfd, nil, events[:], &timeout)
 
-		sync.mutex_lock(&loop.mu)
-		if !loop.running {
-			sync.mutex_unlock(&loop.mu)
-			break
-		}
-
-		// Dispatch file watchers directly from kevent ident.
+		// Dispatch file watchers directly from kevent ident. This runs
+		// without the loop mutex so it isn't blocked by a slow polling
+		// pass (e.g. an overflow burst holding the mutex while snapshot-
+		// diffing a 200-entry dir). The callback only touches the
+		// collector's own mutex, not the loop state, so the race with
+		// the polling pass is benign.
 		if n > 0 {
 			for i in 0..<int(n) {
 				key := posix.FD(int(events[i].ident))
@@ -204,6 +203,12 @@ kq_event_loop_thread :: proc(t: ^thread.Thread) {
 				}
 			}
 			}
+		}
+
+		sync.mutex_lock(&loop.mu)
+		if !loop.running {
+			sync.mutex_unlock(&loop.mu)
+			break
 		}
 
 		// Poll dir + recursive watchers via snapshot diff.
