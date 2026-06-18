@@ -120,4 +120,21 @@ The `event.path` string passed to your callback is only valid during the callbac
 
 ### Thread safety
 
-Watcher state is not thread-safe for concurrent modification. Don't call `destroy` or `rescan` from inside a callback.
+**Callbacks run on the watcher's background thread, not your main thread.** This means your callback code executes concurrently with whatever your main thread is doing. If the callback accesses shared state (slices, maps, counters), you must synchronize access yourself:
+
+```odin
+mu: sync.Mutex
+events: [dynamic]Event
+
+my_cb :: proc(e: ^Event) {
+    sync.mutex_lock(&mu)
+    append(&events, e^)
+    sync.mutex_unlock(&mu)
+}
+```
+
+Don't call `destroy` or `rescan` from inside a callback — it would deadlock trying to join the thread that's running the callback.
+
+### Thread-per-watcher model
+
+Each native watcher creates a dedicated background thread. This is fine for a handful of watchers (1–10), but each thread costs ~8KB of stack space. If you need hundreds of watchers, consider using polling watchers (which share the main thread's time) or consolidating watches into fewer `watch_dir_recursive` calls.
