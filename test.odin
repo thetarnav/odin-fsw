@@ -40,6 +40,12 @@ collector_clear :: proc(c: ^Collector) {
 	sync.mutex_unlock(&c.mu)
 }
 
+// Drain stale events: sleep to let in-flight events arrive, then clear.
+collector_drain :: proc(c: ^Collector) {
+	time.sleep(150 * time.Millisecond)
+	collector_clear(c)
+}
+
 collector_wait :: proc(c: ^Collector, min_count: int, timeout: time.Duration) -> bool {
 	deadline := time.time_to_unix(time.now()) + i64(timeout / time.Second) + 1
 	for time.time_to_unix(time.now()) < deadline {
@@ -259,7 +265,7 @@ test_inotify_file_watcher :: proc(t: ^testing.T) {
 	write_file(filepath_a, "modified inotify")
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "modify: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Modified, "a.txt"), "modify: no Modified event")
-	collector_clear(&c)
+	collector_drain(&c)
 
 	// 2. Delete file
 	os.remove(filepath_a)
@@ -289,7 +295,7 @@ test_inotify_dir_watcher :: proc(t: ^testing.T) {
 	touch_file(file_a)
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "create: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Added, "test.txt"), "create: no Added event")
-	collector_clear(&c)
+	collector_drain(&c)
 
 	// 2. Delete file
 	os.remove(file_a)
@@ -319,14 +325,14 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 	os.mkdir(subdir)
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "subdir create: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Added, "sub"), "subdir create: no Added event")
-	collector_clear(&c)
+	collector_drain(&c)
 
 	// 2. Create file in subdir (auto-watched by recursive)
 	nested := join_path(subdir, "nested.txt")
 	touch_file(nested)
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested create: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Added, "nested.txt"), "nested create: no Added event")
-	collector_clear(&c)
+	collector_drain(&c)
 
 	// 3. Modify nested file
 	// Small delay so snapshot-based backends capture the file at its initial size
@@ -334,7 +340,7 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 	write_file(nested, "updated")
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested modify: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Modified, "nested.txt"), "nested modify: no Modified event")
-	collector_clear(&c)
+	collector_drain(&c)
 
 	// 4. Delete nested file
 	os.remove(nested)
@@ -369,7 +375,7 @@ test_glob_watcher :: proc(t: ^testing.T) {
 	write_file(new_txt, "hello")
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching create: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Added, "new.txt"), "matching create: no Added event")
-	collector_clear(&c)
+	collector_drain(&c)
 
 	// 2. Create a .log file (should NOT match *.txt)
 	new_log := join_path(dir, "test.log")
@@ -384,14 +390,13 @@ test_glob_watcher :: proc(t: ^testing.T) {
 	}
 	sync.mutex_unlock(&c.mu)
 	testing.expect_value(t, log_count, 0)
-	collector_clear(&c)
+	collector_drain(&c)
 
 	// 3. Modify the .txt file (should match)
-	time.sleep(150 * time.Millisecond)
 	write_file(new_txt, "modified")
 	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching modify: timeout")
 	testing.expect(t, collector_has_kind_path(&c, .Modified, "new.txt"), "matching modify: no Modified event")
-	collector_clear(&c)
+	collector_drain(&c)
 
 	// 4. Delete the .txt file (should match)
 	os.remove(new_txt)

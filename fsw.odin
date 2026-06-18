@@ -31,7 +31,8 @@ Watcher_File :: struct {
 	path:          string,
 	running:       bool,
 	native_handle: int,
-	thread:        ^thread.Thread,
+	wd:            int, // inotify watch descriptor (Linux only, unused on other platforms)
+	thread:        ^thread.Thread, // per-watcher thread (non-Linux backends; unused on Linux)
 	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
 }
@@ -43,8 +44,9 @@ Watcher_Dir :: struct {
 	path:          string,
 	running:       bool,
 	native_handle: int,
-	thread:        ^thread.Thread,
+	wd:            int, // inotify watch descriptor (Linux only, unused on other platforms)
 	prev:          map[string]File_Info, // snapshot for kqueue dir diffing
+	thread:        ^thread.Thread, // per-watcher thread (non-Linux backends; unused on Linux)
 	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
 }
@@ -60,8 +62,8 @@ Watcher_Recursive :: struct {
 	native_handle: int,
 	watches:       map[int]string,
 	prev:          map[string]map[string]File_Info, // per-dir snapshot for kqueue diffing
-	thread:        ^thread.Thread,
 	user_data:     rawptr,
+	thread:        ^thread.Thread, // per-watcher thread (non-Linux backends; unused on Linux)
 	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
 }
@@ -117,6 +119,14 @@ Watcher_Glob :: struct {
 	inner:         Watcher_Recursive,
 	caller_ctx:    runtime.Context,
 	allocator:     mem.Allocator,
+}
+
+// Loop_Watcher is a union of native watcher types that use a shared event loop.
+// Used internally by the platform-specific event loop to dispatch events.
+Loop_Watcher :: union {
+	^Watcher_File,
+	^Watcher_Dir,
+	^Watcher_Recursive,
 }
 
 // Watcher is a tagged union that can hold any watcher pointer.
@@ -445,7 +455,7 @@ destroy_glob :: proc(w: ^Watcher_Glob) {
 	w.running = false
 	w.inner.running = false
 	backend_rec_destroy(&w.inner)
-    delete(w.inner.path)
+    delete(w.inner.path, w.allocator)
 	for _, v in w.inner.watches {
 		delete(v, w.allocator)
 	}
