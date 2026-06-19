@@ -14,6 +14,7 @@ package fsw
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
+import "core:strings"
 import "core:time"
 
 // File_Info is a lightweight stat record used by polling watchers to detect changes.
@@ -128,7 +129,11 @@ snapshot_dir_by_name_alloc :: proc(dir: string, prev: ^map[string]File_Info, all
 	}
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." do continue
-		prev[entry.name] = File_Info{
+		// Clone the name since it is a slice into entry.fullpath, which
+		// will be freed when the defer above runs. The map keys must
+		// outlive the entries.
+		name := strings.clone(entry.name, allocator)
+		prev[name] = File_Info{
 			is_dir = entry.type == .Directory,
 			size   = entry.size,
 			mtime  = entry.modification_time,
