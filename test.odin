@@ -10,18 +10,13 @@ import "core:time"
 
 // === Test helpers ===
 
-join_path :: proc(a: string, b: string) -> string {
-	s, _ := filepath.join({a, b}, context.temp_allocator)
-	return s
-}
-
 make_temp_dir :: proc(t: ^testing.T, prefix: string) -> string {
 	name := fmt.tprintf("fsw_test_{}_{}", prefix, time.time_to_unix(time.now()))
 	temp_dir := os.get_env("TMPDIR", context.temp_allocator)
 	if temp_dir == "" { temp_dir = os.get_env("TEMP", context.temp_allocator) }
 	if temp_dir == "" { temp_dir = os.get_env("TMP", context.temp_allocator) }
 	if temp_dir == "" { temp_dir = "/tmp" }
-	dir := join_path(temp_dir, name)
+	dir, _ := filepath.join({temp_dir, name}, context.temp_allocator)
 	err := os.mkdir(dir)
 	testing.expectf(t, err == nil, "cannot create temp dir %s: %v", dir, err)
 	return dir
@@ -32,7 +27,7 @@ remove_all :: proc(dir: string) {
 	if err != nil { return }
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." { continue }
-		full := join_path(dir, entry.name)
+		full, _ := filepath.join({dir, entry.name}, context.temp_allocator)
 		if entry.type == .Directory {
 			remove_all(full)
 		} else {
@@ -59,18 +54,10 @@ touch_file :: proc(path: string) {
 // `collected`. The predicate decides which events are interesting. Stops
 // as soon as the predicate returns true.
 
-Event_Collector :: struct {
-	mu:     Mutex_Stub,
-	events: [dynamic]Collected_Event,
-}
-
 Collected_Event :: struct {
 	kind: Event_Kind,
 	path: string,
 }
-
-@(private)
-Mutex_Stub :: struct {} // no-op stand-in so we can reuse the struct layout
 
 // collect_events drives the watcher in a loop until timeout or found.
 // `polling_interval` is how long to sleep between get_events calls.
@@ -109,7 +96,7 @@ test_poll_file_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "poll_file")
 	defer remove_all(dir)
 
-	filepath_a := join_path(dir, "a.txt")
+	filepath_a, _ := filepath.join({dir, "a.txt"}, context.temp_allocator)
 	touch_file(filepath_a)
 
 	w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
@@ -145,7 +132,7 @@ test_poll_dir_watcher :: proc(t: ^testing.T) {
 	defer destroy(w)
 
 	// 1. Create file
-	file_a := join_path(dir, "new.txt")
+	file_a, _ := filepath.join({dir, "new.txt"}, context.temp_allocator)
 	touch_file(file_a)
 	events, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "new.txt")
@@ -181,10 +168,10 @@ test_poll_recursive_watcher :: proc(t: ^testing.T) {
 	defer destroy(w)
 
 	// 1. Create subdir + file in subdir
-	subdir := join_path(dir, "sub")
+	subdir, _ := filepath.join({dir, "sub"}, context.temp_allocator)
 	os.mkdir(subdir)
 
-	nested_file := join_path(subdir, "deep.txt")
+	nested_file, _ := filepath.join({subdir, "deep.txt"}, context.temp_allocator)
 	touch_file(nested_file)
 
 	events, found := collect_events(t, w, 3 * time.Second, 50 * time.Millisecond, proc(e: ^Event) -> bool {
@@ -222,7 +209,7 @@ test_inotify_file_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "inotify_file")
 	defer remove_all(dir)
 
-	filepath_a := join_path(dir, "a.txt")
+	filepath_a, _ := filepath.join({dir, "a.txt"}, context.temp_allocator)
 	touch_file(filepath_a)
 
 	w, err := watch_file(filepath_a)
@@ -256,7 +243,7 @@ test_inotify_dir_watcher :: proc(t: ^testing.T) {
 	defer destroy(w)
 
 	// 1. Create file
-	file_a := join_path(dir, "test.txt")
+	file_a, _ := filepath.join({dir, "test.txt"}, context.temp_allocator)
 	touch_file(file_a)
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "test.txt")
@@ -282,7 +269,7 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 	defer destroy(w)
 
 	// 1. Create subdir
-	subdir := join_path(dir, "sub")
+	subdir, _ := filepath.join({dir, "sub"}, context.temp_allocator)
 	os.mkdir(subdir)
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "sub")
@@ -290,7 +277,7 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 	testing.expect(t, found, "subdir create: timeout")
 
 	// 2. Create file in subdir (auto-watched by recursive)
-	nested := join_path(subdir, "nested.txt")
+	nested, _ := filepath.join({subdir, "nested.txt"}, context.temp_allocator)
 	touch_file(nested)
 	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "nested.txt")
@@ -319,17 +306,17 @@ test_glob_watcher :: proc(t: ^testing.T) {
 	defer remove_all(dir)
 
 	// Create a file that matches *.txt BEFORE watcher starts (initial scan)
-	pre_existing := join_path(dir, "pre.txt")
+	pre_existing, _ := filepath.join({dir, "pre.txt"}, context.temp_allocator)
 	write_file(pre_existing, "existing")
 
-	pattern := join_path(dir, "*.txt")
+	pattern, _ := filepath.join({dir, "*.txt"}, context.temp_allocator)
 	w, err := watch_glob(pattern)
 	testing.expectf(t, err == .None, "watch_glob error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
 
 	// 1. Create a new .txt file (should match)
-	new_txt := join_path(dir, "new.txt")
+	new_txt, _ := filepath.join({dir, "new.txt"}, context.temp_allocator)
 	write_file(new_txt, "hello")
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "new.txt")
@@ -338,7 +325,7 @@ test_glob_watcher :: proc(t: ^testing.T) {
 
 	// 2. Create a .log file (should NOT match *.txt)
 	// We just verify no event with .log comes through within a short window.
-	new_log := join_path(dir, "test.log")
+	new_log, _ := filepath.join({dir, "test.log"}, context.temp_allocator)
 	write_file(new_log, "log data")
 	events, _ := collect_events(t, w, 300 * time.Millisecond, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return false // never match
@@ -376,7 +363,7 @@ test_stress_many_files :: proc(t: ^testing.T) {
 	// Create 50 files rapidly
 	for i in 0..<50 {
 		name := fmt.tprintf("stress_{}.txt", i)
-		path := join_path(dir, name)
+		path, _ := filepath.join({dir, name}, context.temp_allocator)
 		touch_file(path)
 	}
 
@@ -393,7 +380,7 @@ test_stress_many_files :: proc(t: ^testing.T) {
 	testing.expect(t, added_count >= 50, fmt.tprintf("expected at least 50 Added events, got %d", added_count))
 
 	// Verify watcher is still alive — create one more file with a unique name
-	probe := join_path(dir, "PROBE_AFTER_STRESS.txt")
+	probe, _ := filepath.join({dir, "PROBE_AFTER_STRESS.txt"}, context.temp_allocator)
 	touch_file(probe)
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "PROBE_AFTER_STRESS")
@@ -406,7 +393,7 @@ test_stress_rapid_lifecycle :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "stress_lifecycle")
 	defer remove_all(dir)
 
-	filepath_a := join_path(dir, "lifecycle.txt")
+	filepath_a, _ := filepath.join({dir, "lifecycle.txt"}, context.temp_allocator)
 	touch_file(filepath_a)
 
 	// Create and destroy 20 watchers rapidly
@@ -443,7 +430,7 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 	// Create many files rapidly to try to trigger overflow
 	for i in 0..<200 {
 		name := fmt.tprintf("ovf_{}.txt", i)
-		path := join_path(dir, name)
+		path, _ := filepath.join({dir, name}, context.temp_allocator)
 		touch_file(path)
 	}
 
@@ -464,7 +451,7 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 	}
 
 	// Verify watcher still works after the burst
-	probe := join_path(dir, "PROBE_OVERFLOW.txt")
+	probe, _ := filepath.join({dir, "PROBE_OVERFLOW.txt"}, context.temp_allocator)
 	touch_file(probe)
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "PROBE_OVERFLOW")

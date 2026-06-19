@@ -75,12 +75,11 @@ action_normalize :: proc(action: windows.DWORD) -> Event_Kind {
 
 @(private)
 fni_name :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION) -> string {
-	if entry.file_name_length == 0 { return "" }
-	name_ptr := rawptr(&entry.file_name[0])
-	name_u16 := ([^]u16)(name_ptr)
+	if entry.file_name_length == 0 do return ""
+	name_u16 := ([^]u16)(&entry.file_name[0])
 	name_len := int(entry.file_name_length) / 2
 	slice := name_u16[:name_len]
-	buf := make([]u8, len(slice)*4, context.temp_allocator)
+	buf := make([]u8, name_len*4, context.temp_allocator)
 	s := windows.utf16_to_utf8_buf(buf, slice)
 	return strings.clone(s, context.temp_allocator)
 }
@@ -93,7 +92,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 	dir = dir if dir != "" else "."
 
 	wpath := windows.utf8_to_wstring_alloc(dir, context.temp_allocator)
-	if wpath == nil { return .Backend_Init_Failed }
+	if wpath == nil do return .Backend_Init_Failed
 
 	handle := windows.CreateFileW(
 		wpath,
@@ -104,7 +103,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 		windows.FILE_FLAG_BACKUP_SEMANTICS | windows.FILE_FLAG_OVERLAPPED,
 		nil,
 	)
-	if handle == windows.INVALID_HANDLE_VALUE { return .Backend_Init_Failed }
+	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil {
@@ -157,13 +156,13 @@ backend_file_get_event :: proc(w: ^Watcher_File) -> (Event, bool) {
 	if len(w.events) > 0 {
 		return pop(&w.events), true
 	}
-	return iocp_read_file(w, &w.events, w.allocator, false)
+	return iocp_drain(w, drain=false)
 }
 
 backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
 	for e in w.events { delete(e.path, w.allocator) }
 	clear(&w.events)
-	_, _ = iocp_read_file(w, &w.events, w.allocator, true)
+	iocp_drain(w, drain=true)
 	if len(w.events) == 0 do return nil
 	return w.events[:]
 }
@@ -172,7 +171,7 @@ backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
 
 backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 	wpath := windows.utf8_to_wstring_alloc(w.path, context.temp_allocator)
-	if wpath == nil { return .Backend_Init_Failed }
+	if wpath == nil do return .Backend_Init_Failed
 
 	handle := windows.CreateFileW(
 		wpath,
@@ -183,7 +182,7 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 		windows.FILE_FLAG_BACKUP_SEMANTICS | windows.FILE_FLAG_OVERLAPPED,
 		nil,
 	)
-	if handle == windows.INVALID_HANDLE_VALUE { return .Backend_Init_Failed }
+	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil {
@@ -235,13 +234,13 @@ backend_dir_get_event :: proc(w: ^Watcher_Dir) -> (Event, bool) {
 	if len(w.events) > 0 {
 		return pop(&w.events), true
 	}
-	return iocp_read_dir(w, &w.events, w.allocator, false)
+	return iocp_drain(w, drain=false)
 }
 
 backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
-	for e in w.events { delete(e.path, w.allocator) }
+	for e in w.events do delete(e.path, w.allocator)
 	clear(&w.events)
-	_, _ = iocp_read_dir(w, &w.events, w.allocator, true)
+	iocp_drain(w, drain=true)
 	if len(w.events) == 0 do return nil
 	return w.events[:]
 }
@@ -250,7 +249,7 @@ backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
 
 backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	wpath := windows.utf8_to_wstring_alloc(w.path, context.temp_allocator)
-	if wpath == nil { return .Backend_Init_Failed }
+	if wpath == nil do return .Backend_Init_Failed
 
 	handle := windows.CreateFileW(
 		wpath,
@@ -261,7 +260,7 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 		windows.FILE_FLAG_BACKUP_SEMANTICS | windows.FILE_FLAG_OVERLAPPED,
 		nil,
 	)
-	if handle == windows.INVALID_HANDLE_VALUE { return .Backend_Init_Failed }
+	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil {
@@ -324,13 +323,13 @@ backend_rec_get_event :: proc(w: ^Watcher_Recursive) -> (Event, bool) {
 	if len(w.events) > 0 {
 		return pop(&w.events), true
 	}
-	return iocp_read_rec(w, &w.events, w.allocator, false)
+	return iocp_drain(w, drain=false)
 }
 
 backend_rec_get_events :: proc(w: ^Watcher_Recursive) -> []Event {
 	for e in w.events { delete(e.path, w.allocator) }
 	clear(&w.events)
-	_, _ = iocp_read_rec(w, &w.events, w.allocator, true)
+	iocp_drain(w, drain=true)
 	if len(w.events) == 0 do return nil
 	return w.events[:]
 }
@@ -342,48 +341,46 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive) -> []Event {
 // ReadDirectoryChangesW after each completed (or errored) call so the
 // watcher stays responsive. The events are appended to `out`.
 @(private)
-iocp_drain :: proc(
-	w: ^$T,
-	out: ^[dynamic]Event,
-	allocator: mem.Allocator,
-	drain: bool,
-	process: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^T, allocator: mem.Allocator) -> (Event, bool),
-) -> (Event, bool) {
-	handle := w.native.handle
-	iocp := w.native.iocp
-	event := w.native.event
-	buf := w.native.buf[:w.native.buf_len]
+iocp_drain :: proc(w: ^$T, drain: bool) -> (first: Event, got_one: bool) {
+	handle     := w.native.handle
+	iocp       := w.native.iocp
+	event      := w.native.event
+	buf        := w.native.buf[:w.native.buf_len]
 	overlapped := w.native.overlapped
 
-	got_one: bool
-	first: Event
 	for {
 		bytes: windows.DWORD = 0
 		key: windows.ULONG_PTR = 0
 		overlapped_out: ^windows.OVERLAPPED = nil
-		_ = windows.GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped_out, 50)
+		windows.GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped_out, 50)
 
 		// If no completion was dequeued (timeout), keep waiting with the
 		// existing pending request.
-		if overlapped_out == nil {
-			break
-		}
+		if overlapped_out == nil do break
 
 		if bytes > 0 {
-			entry := cast(^windows.FILE_NOTIFY_INFORMATION) rawptr(&buf[0])
+			entry := (^windows.FILE_NOTIFY_INFORMATION)(&buf[0])
 			for {
-				e, matched := process(entry, w, allocator)
+                e: Event
+                matched: bool
+                when type_of(w) == ^Watcher_File {
+                    process_file_entry(entry, w, w.allocator)
+                } else when type_of(w) == ^Watcher_Dir {
+                    process_dir_entry(entry, w, w.allocator)
+                } else when type_of(w) == ^Watcher_Recursive {
+                    process_rec_entry(entry, w, w.allocator)
+                }
+
 				if matched {
 					if drain {
-						append(out, e)
-						got_one = true
+						append(&w.events, e)
 					} else if !got_one {
 						first = e
-						got_one = true
 					}
+                    got_one = true
 				}
-				if entry.next_entry_offset == 0 { break }
-				entry = cast(^windows.FILE_NOTIFY_INFORMATION)(uintptr(rawptr(entry)) + uintptr(entry.next_entry_offset))
+				if entry.next_entry_offset == 0 do break
+				entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
 			}
 		}
 
@@ -393,8 +390,8 @@ iocp_drain :: proc(
 		windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
 		if !drain do break
 	}
-	if !drain do return first, got_one
-	return {}, got_one
+
+    return
 }
 
 @(private)
@@ -431,19 +428,4 @@ process_rec_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_R
 		fullpath = joined
 	}
 	return Event{kind = kind, path = fullpath}, true
-}
-
-@(private)
-iocp_read_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
-	return iocp_drain(w, out, allocator, drain, process_file_entry)
-}
-
-@(private)
-iocp_read_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
-	return iocp_drain(w, out, allocator, drain, process_dir_entry)
-}
-
-@(private)
-iocp_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
-	return iocp_drain(w, out, allocator, drain, process_rec_entry)
 }
