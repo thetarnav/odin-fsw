@@ -385,45 +385,45 @@ get_events_file :: proc(w: ^Watcher_File) -> [dynamic]Event {
 }
 
 // get_events_dir returns all available events from a Watcher_Dir.
-get_events_dir :: proc(w: ^Watcher_Dir) -> [dynamic]Event {
+get_events_dir :: proc(w: ^Watcher_Dir) -> []Event {
 	events := make([dynamic]Event, 0, 16, w.allocator)
 	backend_dir_get_events(w, &events)
-	return events
+	return events[:]
 }
 
 // get_events_rec returns all available events from a Watcher_Recursive.
-get_events_rec :: proc(w: ^Watcher_Recursive) -> [dynamic]Event {
+get_events_rec :: proc(w: ^Watcher_Recursive) -> []Event {
 	events := make([dynamic]Event, 0, 16, w.allocator)
 	backend_rec_get_events(w, &events)
-	return events
+	return events[:]
 }
 
 // get_events_glob returns all available events from a Watcher_Glob.
 // Internally calls get_events on the embedded recursive watcher and filters
 // through the glob pattern.
-get_events_glob :: proc(w: ^Watcher_Glob) -> [dynamic]Event {
-	return glob_get_events(w)
+get_events_glob :: proc(w: ^Watcher_Glob) -> []Event {
+	return glob_get_events(w)[:]
 }
 
 // get_events_file_poll returns all available events from a Watcher_File_Poll.
-get_events_file_poll :: proc(w: ^Watcher_File_Poll) -> [dynamic]Event {
+get_events_file_poll :: proc(w: ^Watcher_File_Poll) -> []Event {
 	events := make([dynamic]Event, 0, 4, w.allocator)
 	poll_file_get_events(w, &events)
-	return events
+	return events[:]
 }
 
 // get_events_dir_poll returns all available events from a Watcher_Dir_Poll.
-get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll) -> [dynamic]Event {
+get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll) -> []Event {
 	events := make([dynamic]Event, 0, 16, w.allocator)
 	poll_dir_get_events(w, &events)
-	return events
+	return events[:]
 }
 
 // get_events_rec_poll returns all available events from a Watcher_Recursive_Poll.
-get_events_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> [dynamic]Event {
+get_events_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> []Event {
 	events := make([dynamic]Event, 0, 16, w.allocator)
 	poll_rec_get_events(w, &events)
-	return events
+	return events[:]
 }
 
 // get_events is a procedure group that accepts any watcher type.
