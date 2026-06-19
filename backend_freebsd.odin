@@ -204,23 +204,25 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 }
 
 freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
-	file, err := os.open(dir, os.O_RDONLY)
-	if err != nil do return
-	fd := int(os.fd(file))
+	cs, cs_err := strings.clone_to_cstring(dir, context.temp_allocator)
+	if cs_err != nil do return
+	fd := posix.open(cs, posix.O_Flags{})
+	if fd == posix.FD(-1) do return
+	fd_int := int(fd)
 
 	ev := kqueue.KEvent{
-		ident  = uintptr(fd),
+		ident  = uintptr(fd_int),
 		filter = .VNode,
 		flags  = {.Add, .Clear},
 	}
 	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
-	_, errno := kqueue.kevent(w.native.kq, []kqueue.KEvent{ev}, nil, nil)
-	if errno != .NONE {
-		os.close(file)
+	_, errno2 := kqueue.kevent(w.native.kq, []kqueue.KEvent{ev}, nil, nil)
+	if errno2 != .NONE {
+		posix.close(fd)
 		return
 	}
 
-	w.native.watches[fd] = strings.clone(dir, w.allocator)
+	w.native.watches[fd_int] = strings.clone(dir, w.allocator)
 
 	dir_prev := make(map[string]File_Info, w.allocator)
 	snapshot_dir_by_name_alloc(dir, &dir_prev, w.allocator)
