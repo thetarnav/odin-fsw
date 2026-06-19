@@ -19,6 +19,38 @@ import "core:path/filepath"
 import "core:strings"
 import "core:sys/windows"
 
+// === Platform-specific native data ===
+// The Native_* structs hold Windows HANDLEs for the directory, event, IOCP,
+// notification buffer, and OVERLAPPED structure.
+
+Native_File :: struct {
+	handle:     windows.HANDLE,  // directory handle
+	event:      windows.HANDLE,  // event handle
+	iocp:       windows.HANDLE,  // IOCP handle
+	buf:        [^]u8,           // notification buffer
+	buf_len:    int,
+	overlapped: ^windows.OVERLAPPED,
+	target:     string, // filename to filter for file watcher
+}
+
+Native_Dir :: struct {
+	handle:     windows.HANDLE,
+	event:      windows.HANDLE,
+	iocp:       windows.HANDLE,
+	buf:        [^]u8,
+	buf_len:    int,
+	overlapped: ^windows.OVERLAPPED,
+}
+
+Native_Recursive :: struct {
+	handle:     windows.HANDLE,
+	event:      windows.HANDLE,
+	iocp:       windows.HANDLE,
+	buf:        [^]u8,
+	buf_len:    int,
+	overlapped: ^windows.OVERLAPPED,
+}
+
 @(private)
 NOTIFY_FILTER :: (
     windows.FILE_NOTIFY_CHANGE_FILE_NAME |
@@ -93,28 +125,28 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 	buf := make([]u8, 4096, w.allocator)
 	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
 
-	w.native.handle = rawptr(handle)
-	w.native.event = rawptr(event)
-	w.native.iocp = rawptr(iocp)
+	w.native.handle = handle
+	w.native.event = event
+	w.native.iocp = iocp
 	w.native.buf = raw_data(buf)
 	w.native.buf_len = len(buf)
-	w.native.overlapped = rawptr(overlapped)
+	w.native.overlapped = overlapped
 	w.native.target = filepath.base(w.path)
 	return .None
 }
 
 backend_file_destroy :: proc(w: ^Watcher_File) {
 	if w.native.iocp != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.iocp))
+		windows.CloseHandle(w.native.iocp)
 	}
 	if w.native.event != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.event))
+		windows.CloseHandle(w.native.event)
 	}
 	if w.native.handle != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.handle))
+		windows.CloseHandle(w.native.handle)
 	}
 	if w.native.overlapped != nil {
-		free(cast(^windows.OVERLAPPED)w.native.overlapped, w.allocator)
+		free(w.native.overlapped, w.allocator)
 	}
 	if w.native.buf != nil {
 		delete(w.native.buf[:w.native.buf_len], w.allocator)
@@ -172,27 +204,27 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 	buf := make([]u8, 4096, w.allocator)
 	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
 
-	w.native.handle = rawptr(handle)
-	w.native.event = rawptr(event)
-	w.native.iocp = rawptr(iocp)
+	w.native.handle = handle
+	w.native.event = event
+	w.native.iocp = iocp
 	w.native.buf = raw_data(buf)
 	w.native.buf_len = len(buf)
-	w.native.overlapped = rawptr(overlapped)
+	w.native.overlapped = overlapped
 	return .None
 }
 
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	if w.native.iocp != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.iocp))
+		windows.CloseHandle(w.native.iocp)
 	}
 	if w.native.event != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.event))
+		windows.CloseHandle(w.native.event)
 	}
 	if w.native.handle != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.handle))
+		windows.CloseHandle(w.native.handle)
 	}
 	if w.native.overlapped != nil {
-		free(cast(^windows.OVERLAPPED)w.native.overlapped, w.allocator)
+		free(w.native.overlapped, w.allocator)
 	}
 	if w.native.buf != nil {
 		delete(w.native.buf[:w.native.buf_len], w.allocator)
@@ -250,31 +282,36 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	buf := make([]u8, 8192, w.allocator)
 	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), true, NOTIFY_FILTER, nil, overlapped, nil)
 
-	w.native.handle = rawptr(handle)
-	w.native.event = rawptr(event)
-	w.native.iocp = rawptr(iocp)
+	w.native.handle = handle
+	w.native.event = event
+	w.native.iocp = iocp
 	w.native.buf = raw_data(buf)
 	w.native.buf_len = len(buf)
-	w.native.overlapped = rawptr(overlapped)
+	w.native.overlapped = overlapped
 	return .None
 }
 
 backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 	if w.native.iocp != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.iocp))
+		windows.CloseHandle(w.native.iocp)
 	}
 	if w.native.event != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.event))
+		windows.CloseHandle(w.native.event)
 	}
 	if w.native.handle != nil {
-		windows.CloseHandle(windows.HANDLE(w.native.handle))
+		windows.CloseHandle(w.native.handle)
 	}
 	if w.native.overlapped != nil {
-		free(cast(^windows.OVERLAPPED)w.native.overlapped, w.allocator)
+		free(w.native.overlapped, w.allocator)
 	}
 	if w.native.buf != nil {
 		delete(w.native.buf[:w.native.buf_len], w.allocator)
 	}
+}
+
+backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
+	// Windows uses ReadDirectoryChangesW with bWatchSubtree=TRUE, so
+	// there's no per-subdirectory state to clean up.
 }
 
 backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
@@ -312,11 +349,11 @@ iocp_drain :: proc(
 	drain: bool,
 	process: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^T, allocator: mem.Allocator) -> (Event, bool),
 ) -> (Event, bool) {
-	handle := windows.HANDLE(w.native.handle)
-	iocp := windows.HANDLE(w.native.iocp)
-	event := windows.HANDLE(w.native.event)
+	handle := w.native.handle
+	iocp := w.native.iocp
+	event := w.native.event
 	buf := w.native.buf[:w.native.buf_len]
-	overlapped := cast(^windows.OVERLAPPED)w.native.overlapped
+	overlapped := w.native.overlapped
 
 	got_one: bool
 	first: Event

@@ -20,6 +20,24 @@ import "core:path/filepath"
 import "core:strings"
 import "core:sys/linux"
 
+// === Platform-specific native data ===
+// The Native_* structs hold the inotify fd/watch-descriptor pair.
+
+Native_File :: struct {
+	fd: linux.Fd, // inotify fd
+	wd: linux.Wd, // watch descriptor for the target file
+}
+
+Native_Dir :: struct {
+	fd: linux.Fd, // inotify fd
+	wd: linux.Wd, // watch descriptor for the target directory
+}
+
+Native_Recursive :: struct {
+	fd:      linux.Fd,        // inotify fd
+	watches: map[int]string,  // wd -> dir_path
+}
+
 INOTIFY_MASK :: linux.Inotify_Event_Mask{
 	.CREATE, .MODIFY, .DELETE, .MOVED_FROM, .MOVED_TO,
 	.DELETE_SELF, .MOVE_SELF, .CLOSE_WRITE, .ISDIR,
@@ -65,20 +83,20 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 		linux.close(fd)
 		return .Backend_Init_Failed
 	}
-	w.native.fd = int(fd)
-	w.native.wd = int(wd)
+	w.native.fd = fd
+	w.native.wd = wd
 	return .None
 }
 
 backend_file_destroy :: proc(w: ^Watcher_File) {
-	linux.close(linux.Fd(w.native.fd))
+	linux.close(w.native.fd)
 }
 
 backend_file_get_event :: proc(w: ^Watcher_File) -> (Event, bool) {
 	if len(w.events) > 0 {
 		return pop(&w.events), true
 	}
-	return inotify_read(linux.Fd(w.native.fd), linux.Wd(w.native.wd), w.path, &w.events, w.allocator, false)
+	return inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, false)
 }
 
 backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
@@ -86,7 +104,7 @@ backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
 		delete(e.path, w.allocator)
 	}
 	clear(&w.events)
-	_, _ = inotify_read(linux.Fd(w.native.fd), linux.Wd(w.native.wd), w.path, &w.events, w.allocator, true)
+	_, _ = inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, true)
 	if len(w.events) == 0 do return nil
 	return w.events[:]
 }
@@ -104,20 +122,20 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 		linux.close(fd)
 		return .Backend_Init_Failed
 	}
-	w.native.fd = int(fd)
-	w.native.wd = int(wd)
+	w.native.fd = fd
+	w.native.wd = wd
 	return .None
 }
 
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
-	linux.close(linux.Fd(w.native.fd))
+	linux.close(w.native.fd)
 }
 
 backend_dir_get_event :: proc(w: ^Watcher_Dir) -> (Event, bool) {
 	if len(w.events) > 0 {
 		return pop(&w.events), true
 	}
-	return inotify_read(linux.Fd(w.native.fd), linux.Wd(w.native.wd), w.path, &w.events, w.allocator, false)
+	return inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, false)
 }
 
 backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
@@ -125,7 +143,7 @@ backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
 		delete(e.path, w.allocator)
 	}
 	clear(&w.events)
-	_, _ = inotify_read(linux.Fd(w.native.fd), linux.Wd(w.native.wd), w.path, &w.events, w.allocator, true)
+	_, _ = inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, true)
 	if len(w.events) == 0 do return nil
 	return w.events[:]
 }
@@ -137,7 +155,7 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	if errno != .NONE {
 		return .Backend_Init_Failed
 	}
-	w.native.fd = int(fd)
+	w.native.fd = fd
 	w.native.watches = make(map[int]string, w.allocator)
 	rec_add_watch(w, w.path)
 	return .None
@@ -145,14 +163,21 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 
 backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 	for wd_key in w.native.watches {
-		linux.inotify_rm_watch(linux.Fd(w.native.fd), linux.Wd(wd_key))
+		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
 	}
-	linux.close(linux.Fd(w.native.fd))
+	linux.close(w.native.fd)
+}
+
+backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
+	for _, v in w.native.watches {
+		delete(v, w.allocator)
+	}
+	delete(w.native.watches)
 }
 
 backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 	for wd_key in w.native.watches {
-		linux.inotify_rm_watch(linux.Fd(w.native.fd), linux.Wd(wd_key))
+		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
 	}
 	for _, v in w.native.watches {
 		delete(v, w.allocator)
@@ -164,7 +189,7 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 
 rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	cs := to_cstring(dir)
-	wd, errno := linux.inotify_add_watch(linux.Fd(w.native.fd), cs, INOTIFY_MASK)
+	wd, errno := linux.inotify_add_watch(w.native.fd, cs, INOTIFY_MASK)
 	if errno != .NONE do return
 
 	w.native.watches[int(wd)] = strings.clone(dir, w.allocator)
@@ -264,7 +289,7 @@ inotify_read_rec :: proc(
 	buf: [INOTIFY_BUF_SIZE]byte
 	got_one: bool
 	for {
-		n, errno := linux.read(linux.Fd(w.native.fd), buf[:])
+		n, errno := linux.read(w.native.fd, buf[:])
 		if errno == .EAGAIN || n <= 0 {
 			break
 		}

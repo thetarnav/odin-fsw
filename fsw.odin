@@ -20,75 +20,6 @@ import "core:os"
 import "core:path/filepath"
 import "core:time"
 
-// === Platform-specific native data ===
-// These structs hold platform-specific state (file descriptors, kqueue handles,
-// inotify watches, etc.) for the native backends. They are defined per-platform
-// using `when` blocks so the rest of the library can refer to them uniformly.
-
-when ODIN_OS == .Linux {
-	Native_File :: struct {
-		fd: int, // inotify fd (linux.Fd, stored as int to avoid platform import)
-		wd: int, // watch descriptor (linux.Wd, stored as int)
-	}
-
-	Native_Dir :: struct {
-		fd: int,
-		wd: int,
-	}
-
-	Native_Recursive :: struct {
-		fd:      int,            // inotify fd
-		watches: map[int]string, // wd -> dir_path
-	}
-} else when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD {
-	Native_File :: struct {
-		kq:   int, // kqueue fd
-		fd:   int, // file descriptor of the open target
-		file: rawptr, // os.File handle (typed as rawptr to avoid import cycle)
-	}
-
-	Native_Dir :: struct {
-		kq:   int,
-		fd:   int,
-		file: rawptr,
-		prev: map[string]File_Info, // snapshot keyed by entry name
-	}
-
-	Native_Recursive :: struct {
-		kq:      int,
-		watches: map[int]string,                   // fd -> dir_path
-		prev:    map[string]map[string]File_Info,  // dir_path -> {entry_name -> File_Info}
-	}
-} else when ODIN_OS == .Windows {
-	Native_File :: struct {
-		handle:     rawptr, // directory handle (windows.HANDLE)
-		event:      rawptr, // event handle (windows.HANDLE)
-		iocp:       rawptr, // IOCP handle (windows.HANDLE)
-		buf:        [^]u8,  // notification buffer
-		buf_len:    int,
-		overlapped: rawptr, // OVERLAPPED pointer
-		target:     string, // filename to filter for file watcher
-	}
-
-	Native_Dir :: struct {
-		handle:     rawptr,
-		event:      rawptr,
-		iocp:       rawptr,
-		buf:        [^]u8,
-		buf_len:    int,
-		overlapped: rawptr,
-	}
-
-	Native_Recursive :: struct {
-		handle:     rawptr,
-		event:      rawptr,
-		iocp:       rawptr,
-		buf:        [^]u8,
-		buf_len:    int,
-		overlapped: rawptr,
-	}
-}
-
 // === Watcher types ===
 
 // Watcher_File watches a single file using the OS-native backend.
@@ -482,33 +413,10 @@ destroy :: proc {
 
 // cleanup_recursive_native frees platform-specific native data for a
 // Watcher_Recursive. This is called from destroy_rec / destroy_glob after
-// the backend has done its own cleanup (e.g. closed fds).
-when ODIN_OS == .Linux {
-	cleanup_recursive_native :: proc(w: ^Watcher_Recursive) {
-		for _, v in w.native.watches {
-			delete(v, w.allocator)
-		}
-		delete(w.native.watches)
-	}
-} else when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD {
-	cleanup_recursive_native :: proc(w: ^Watcher_Recursive) {
-		for _, v in w.native.watches {
-			delete(v, w.allocator)
-		}
-		delete(w.native.watches)
-		for _, inner in w.native.prev {
-			for k in inner {
-				delete(k, w.allocator)
-			}
-			delete(inner)
-		}
-		delete(w.native.prev)
-	}
-} else when ODIN_OS == .Windows {
-	cleanup_recursive_native :: proc(w: ^Watcher_Recursive) {
-		// Windows uses ReadDirectoryChangesW with bWatchSubtree=TRUE, so
-		// there's no per-subdirectory state to clean up.
-	}
+// the backend has done its own cleanup (e.g. closed fds). The actual
+// implementation is in each platform's backend file.
+cleanup_recursive_native :: proc {
+	backend_rec_native_cleanup,
 }
 
 // === get_event / get_events ===

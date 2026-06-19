@@ -22,6 +22,29 @@ import "core:strings"
 import "core:sys/kqueue"
 import "core:sys/posix"
 
+// === Platform-specific native data ===
+// The Native_* structs hold the kqueue fd, the open file fd, and (for
+// dir/recursive) snapshot state for diffing.
+
+Native_File :: struct {
+	kq:   posix.FD, // kqueue fd
+	fd:   int,      // file descriptor of the open target
+	file: ^os.File, // os.File handle
+}
+
+Native_Dir :: struct {
+	kq:   posix.FD,
+	fd:   int,
+	file: ^os.File,
+	prev: map[string]File_Info, // snapshot keyed by entry name
+}
+
+Native_Recursive :: struct {
+	kq:      posix.FD,
+	watches: map[int]string,                   // fd -> dir_path
+	prev:    map[string]map[string]File_Info,  // dir_path -> {entry_name -> File_Info}
+}
+
 kq_normalize :: proc(fflags: kqueue.VNode_Flags) -> Event_Kind {
 	if .Delete in fflags || .Revoke in fflags { return .Removed }
 	if .Rename in fflags { return .Renamed }
@@ -56,15 +79,15 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 		return .Backend_Init_Failed
 	}
 
-	w.native.kq = int(kq)
+	w.native.kq = kq
 	w.native.fd = fd
-	w.native.file = rawptr(file)
+	w.native.file = file
 	return .None
 }
 
 backend_file_destroy :: proc(w: ^Watcher_File) {
-	posix.close(posix.FD(w.native.kq))
-	os.close(cast(^os.File)w.native.file)
+	posix.close(w.native.kq)
+	os.close(w.native.file)
 }
 
 backend_file_get_event :: proc(w: ^Watcher_File) -> (Event, bool) {
@@ -108,17 +131,17 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 		return .Backend_Init_Failed
 	}
 
-	w.native.kq = int(kq)
+	w.native.kq = kq
 	w.native.fd = fd
-	w.native.file = rawptr(file)
+	w.native.file = file
 	w.native.prev = make(map[string]File_Info, w.allocator)
 	snapshot_dir_by_name_alloc(w.path, &w.native.prev, w.allocator)
 	return .None
 }
 
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
-	posix.close(posix.FD(w.native.kq))
-	os.close(cast(^os.File)w.native.file)
+	posix.close(w.native.kq)
+	os.close(w.native.file)
 	for k in w.native.prev { delete(k, w.allocator) }
 	delete(w.native.prev)
 }
@@ -143,7 +166,7 @@ backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
 backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	kq, errno := kqueue.kqueue()
 	if errno != .NONE { return .Backend_Init_Failed }
-	w.native.kq = int(kq)
+	w.native.kq = kq
 	w.native.watches = make(map[int]string, w.allocator)
 	w.native.prev = make(map[string]map[string]File_Info, w.allocator)
 	darwin_rec_add_watch(w, w.path)
@@ -151,10 +174,24 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 }
 
 backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
-	posix.close(posix.FD(w.native.kq))
+	posix.close(w.native.kq)
 	for fd_key in w.native.watches {
 		posix.close(posix.FD(fd_key))
 	}
+}
+
+backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
+	for _, v in w.native.watches {
+		delete(v, w.allocator)
+	}
+	delete(w.native.watches)
+	for _, inner in w.native.prev {
+		for k in inner {
+			delete(k, w.allocator)
+		}
+		delete(inner)
+	}
+	delete(w.native.prev)
 }
 
 backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
@@ -183,7 +220,7 @@ darwin_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 		flags  = {.Add, .Clear},
 	}
 	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
-	_, errno := kqueue.kevent(posix.FD(w.native.kq), []kqueue.KEvent{ev}, nil, nil)
+	_, errno := kqueue.kevent(w.native.kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno != .NONE {
 		os.close(file)
 		return
@@ -234,7 +271,8 @@ kqueue_read_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event, allocator: mem.
 	events: [1]kqueue.KEvent
 	got_one: bool
 	for {
-		_, _ = kqueue.kevent(posix.FD(w.native.kq), nil, events[:], nil)
+		n, _ := kqueue.kevent(w.native.kq, nil, events[:], nil)
+		if n <= 0 do break
 		ev := events[0]
 		if ev.filter == .VNode {
 			fflags := ev.fflags.vnode
@@ -290,7 +328,7 @@ dir_diff :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Allocator
 kqueue_read_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
 	// Drain kqueue (kqueue VNode catches some events but not content changes)
 	events: [1]kqueue.KEvent
-	_, _ = kqueue.kevent(posix.FD(w.native.kq), nil, events[:], nil)
+	_, _ = kqueue.kevent(w.native.kq, nil, events[:], nil)
 
 	// Save state in case we need to abort and restore
 	old := w.native.prev
@@ -393,7 +431,7 @@ rec_diff :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: mem.All
 kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
 	// Drain kqueue
 	events: [64]kqueue.KEvent
-	_, _ = kqueue.kevent(posix.FD(w.native.kq), nil, events[:], nil)
+	_, _ = kqueue.kevent(w.native.kq, nil, events[:], nil)
 
 	// Snapshot diff for all watched dirs
 	got_one: bool
