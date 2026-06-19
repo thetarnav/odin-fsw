@@ -361,14 +361,23 @@ iocp_drain :: proc(w: ^$T, drain: bool) -> (first: Event, got_one: bool) {
 		if bytes > 0 {
 			entry := (^windows.FILE_NOTIFY_INFORMATION)(&buf[0])
 			for {
-				e, matched := process_entry(entry, w)
+                e: Event
+                matched: bool
+                when type_of(w) == ^Watcher_File {
+                    process_file_entry(entry, w, w.allocator)
+                } else when type_of(w) == ^Watcher_Dir {
+                    process_dir_entry(entry, w, w.allocator)
+                } else when type_of(w) == ^Watcher_Recursive {
+                    process_rec_entry(entry, w, w.allocator)
+                }
+
 				if matched {
 					if drain {
 						append(&w.events, e)
 					} else if !got_one {
 						first = e
 					}
-					got_one = true
+                    got_one = true
 				}
 				if entry.next_entry_offset == 0 do break
 				entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
@@ -391,18 +400,6 @@ process_file_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_
 	if name == w.native.target {
 		kind := action_normalize(entry.action)
 		return Event{kind = kind, path = strings.clone(w.path, allocator)}, true
-	}
-	return {}, false
-}
-
-@(private)
-process_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^$T) -> (Event, bool) {
-	when type_of(w) == ^Watcher_File {
-		return process_file_entry(entry, w, w.allocator)
-	} else when type_of(w) == ^Watcher_Dir {
-		return process_dir_entry(entry, w, w.allocator)
-	} else when type_of(w) == ^Watcher_Recursive {
-		return process_rec_entry(entry, w, w.allocator)
 	}
 	return {}, false
 }
