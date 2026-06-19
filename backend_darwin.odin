@@ -63,10 +63,10 @@ backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
 
 	file, os_err := os.open(w.path, os.O_RDONLY)
 	if os_err != nil do return .Backend_Init_Failed
-	track_open(w, file)
+	track_open(w, uintptr(file))
 	defer if err != nil {
 		os.close(file)
-		track_close(w, file)
+		track_close(w, uintptr(file))
 	}
 
 	kq, errno := kqueue.kqueue()
@@ -96,7 +96,7 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	posix.close(w.native.kq)
 	track_close(w, w.native.kq)
 	os.close(w.native.file)
-	track_close(w, w.native.file)
+	track_close(w, uintptr(w.native.file))
 	track_end(w)
 }
 
@@ -123,10 +123,10 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
 
 	file, os_err := os.open(w.path, os.O_RDONLY)
 	if os_err != nil do return .Backend_Init_Failed
-	track_open(w, file)
+	track_open(w, uintptr(file))
 	defer if err != nil {
 		os.close(file)
-		track_close(w, file)
+		track_close(w, uintptr(file))
 	}
 
 	kq, errno := kqueue.kqueue()
@@ -159,7 +159,7 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	posix.close(w.native.kq)
 	track_close(w, w.native.kq)
 	os.close(w.native.file)
-	track_close(w, w.native.file)
+	track_close(w, uintptr(w.native.file))
 	for k in w.native.prev do delete(k, w.allocator)
 	delete(w.native.prev)
 	track_end(w)
