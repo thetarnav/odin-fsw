@@ -1,9 +1,9 @@
 #+test
 package fsw
 
+import "core:relative"
 import "core:fmt"
 import "core:os"
-import "core:path/filepath"
 import "core:strings"
 import "core:testing"
 import "core:time"
@@ -13,10 +13,10 @@ import "core:time"
 make_temp_dir :: proc(t: ^testing.T, prefix: string) -> string {
 	name := fmt.tprintf("fsw_test_{}_{}", prefix, time.time_to_unix(time.now()))
 	temp_dir := os.get_env("TMPDIR", context.temp_allocator)
-	if temp_dir == "" { temp_dir = os.get_env("TEMP", context.temp_allocator) }
-	if temp_dir == "" { temp_dir = os.get_env("TMP", context.temp_allocator) }
-	if temp_dir == "" { temp_dir = "/tmp" }
-	dir, _ := filepath.join({temp_dir, name}, context.temp_allocator)
+	if temp_dir == "" do temp_dir = os.get_env("TEMP", context.temp_allocator)
+	if temp_dir == "" do temp_dir = os.get_env("TMP", context.temp_allocator)
+	if temp_dir == "" do temp_dir = "/tmp"
+	dir, _ := os.join_path({temp_dir, name}, context.temp_allocator)
 	err := os.mkdir(dir)
 	testing.expectf(t, err == nil, "cannot create temp dir %s: %v", dir, err)
 	return dir
@@ -24,10 +24,10 @@ make_temp_dir :: proc(t: ^testing.T, prefix: string) -> string {
 
 remove_all :: proc(dir: string) {
 	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
-	if err != nil { return }
+	if err != nil do return
 	for entry in entries {
-		if entry.name == "." || entry.name == ".." { continue }
-		full, _ := filepath.join({dir, entry.name}, context.temp_allocator)
+		if entry.name == "." || entry.name == ".." do continue
+		full, _ := os.join_path({dir, entry.name}, context.temp_allocator)
 		if entry.type == .Directory {
 			remove_all(full)
 		} else {
@@ -39,7 +39,7 @@ remove_all :: proc(dir: string) {
 
 write_file :: proc(path: string, content: string) {
 	fd, err := os.create(path)
-	if err != nil { return }
+	if err != nil do return
 	os.write(fd, transmute([]byte)content)
 	os.close(fd)
 }
@@ -96,12 +96,12 @@ test_poll_file_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "poll_file")
 	defer remove_all(dir)
 
-	filepath_a, _ := filepath.join({dir, "a.txt"}, context.temp_allocator)
+	filepath_a, _ := os.join_path({dir, "a.txt"}, context.temp_allocator)
 	touch_file(filepath_a)
 
 	w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_file_poll error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer destroy(w)
 
 	// 1. Modify file
@@ -128,11 +128,11 @@ test_poll_dir_watcher :: proc(t: ^testing.T) {
 
 	w, err := watch_dir_poll(dir, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_dir_poll error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer destroy(w)
 
 	// 1. Create file
-	file_a, _ := filepath.join({dir, "new.txt"}, context.temp_allocator)
+	file_a, _ := os.join_path({dir, "new.txt"}, context.temp_allocator)
 	touch_file(file_a)
 	events, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "new.txt")
@@ -164,14 +164,14 @@ test_poll_recursive_watcher :: proc(t: ^testing.T) {
 
 	w, err := watch_dir_poll_recursive(dir, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_dir_poll_recursive error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer destroy(w)
 
 	// 1. Create subdir + file in subdir
-	subdir, _ := filepath.join({dir, "sub"}, context.temp_allocator)
+	subdir, _ := os.join_path({dir, "sub"}, context.temp_allocator)
 	os.mkdir(subdir)
 
-	nested_file, _ := filepath.join({subdir, "deep.txt"}, context.temp_allocator)
+	nested_file, _ := os.join_path({subdir, "deep.txt"}, context.temp_allocator)
 	touch_file(nested_file)
 
 	events, found := collect_events(t, w, 3 * time.Second, 50 * time.Millisecond, proc(e: ^Event) -> bool {
@@ -209,12 +209,12 @@ test_inotify_file_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "inotify_file")
 	defer remove_all(dir)
 
-	filepath_a, _ := filepath.join({dir, "a.txt"}, context.temp_allocator)
+	filepath_a, _ := os.join_path({dir, "a.txt"}, context.temp_allocator)
 	touch_file(filepath_a)
 
 	w, err := watch_file(filepath_a)
 	testing.expectf(t, err == .None, "watch_file error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer destroy(w)
 
 	// 1. Modify file
@@ -239,11 +239,11 @@ test_inotify_dir_watcher :: proc(t: ^testing.T) {
 
 	w, err := watch_dir(dir)
 	testing.expectf(t, err == .None, "watch_dir error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer destroy(w)
 
 	// 1. Create file
-	file_a, _ := filepath.join({dir, "test.txt"}, context.temp_allocator)
+	file_a, _ := os.join_path({dir, "test.txt"}, context.temp_allocator)
 	touch_file(file_a)
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "test.txt")
@@ -265,11 +265,11 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 
 	w, err := watch_dir_recursive(dir)
 	testing.expectf(t, err == .None, "watch_dir_recursive error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer destroy(w)
 
 	// 1. Create subdir
-	subdir, _ := filepath.join({dir, "sub"}, context.temp_allocator)
+	subdir, _ := os.join_path({dir, "sub"}, context.temp_allocator)
 	os.mkdir(subdir)
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "sub")
@@ -277,7 +277,7 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 	testing.expect(t, found, "subdir create: timeout")
 
 	// 2. Create file in subdir (auto-watched by recursive)
-	nested, _ := filepath.join({subdir, "nested.txt"}, context.temp_allocator)
+	nested, _ := os.join_path({subdir, "nested.txt"}, context.temp_allocator)
 	touch_file(nested)
 	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "nested.txt")
@@ -306,17 +306,17 @@ test_glob_watcher :: proc(t: ^testing.T) {
 	defer remove_all(dir)
 
 	// Create a file that matches *.txt BEFORE watcher starts (initial scan)
-	pre_existing, _ := filepath.join({dir, "pre.txt"}, context.temp_allocator)
+	pre_existing, _ := os.join_path({dir, "pre.txt"}, context.temp_allocator)
 	write_file(pre_existing, "existing")
 
-	pattern, _ := filepath.join({dir, "*.txt"}, context.temp_allocator)
+	pattern, _ := os.join_path({dir, "*.txt"}, context.temp_allocator)
 	w, err := watch_glob(pattern)
 	testing.expectf(t, err == .None, "watch_glob error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer destroy(w)
 
 	// 1. Create a new .txt file (should match)
-	new_txt, _ := filepath.join({dir, "new.txt"}, context.temp_allocator)
+	new_txt, _ := os.join_path({dir, "new.txt"}, context.temp_allocator)
 	write_file(new_txt, "hello")
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "new.txt")
@@ -325,7 +325,7 @@ test_glob_watcher :: proc(t: ^testing.T) {
 
 	// 2. Create a .log file (should NOT match *.txt)
 	// We just verify no event with .log comes through within a short window.
-	new_log, _ := filepath.join({dir, "test.log"}, context.temp_allocator)
+	new_log, _ := os.join_path({dir, "test.log"}, context.temp_allocator)
 	write_file(new_log, "log data")
 	events, _ := collect_events(t, w, 300 * time.Millisecond, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return false // never match
@@ -363,7 +363,7 @@ test_stress_many_files :: proc(t: ^testing.T) {
 	// Create 50 files rapidly
 	for i in 0..<50 {
 		name := fmt.tprintf("stress_{}.txt", i)
-		path, _ := filepath.join({dir, name}, context.temp_allocator)
+		path, _ := os.join_path({dir, name}, context.temp_allocator)
 		touch_file(path)
 	}
 
@@ -380,7 +380,7 @@ test_stress_many_files :: proc(t: ^testing.T) {
 	testing.expect(t, added_count >= 50, fmt.tprintf("expected at least 50 Added events, got %d", added_count))
 
 	// Verify watcher is still alive — create one more file with a unique name
-	probe, _ := filepath.join({dir, "PROBE_AFTER_STRESS.txt"}, context.temp_allocator)
+	probe, _ := os.join_path({dir, "PROBE_AFTER_STRESS.txt"}, context.temp_allocator)
 	touch_file(probe)
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "PROBE_AFTER_STRESS")
@@ -393,7 +393,7 @@ test_stress_rapid_lifecycle :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "stress_lifecycle")
 	defer remove_all(dir)
 
-	filepath_a, _ := filepath.join({dir, "lifecycle.txt"}, context.temp_allocator)
+	filepath_a, _ := os.join_path({dir, "lifecycle.txt"}, context.temp_allocator)
 	touch_file(filepath_a)
 
 	// Create and destroy 20 watchers rapidly
@@ -424,13 +424,13 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 
 	w, err := watch_dir(dir)
 	testing.expectf(t, err == .None, "watch_dir error: %v", err)
-	if err != nil { return }
+	if err != nil do return
 	defer destroy(w)
 
 	// Create many files rapidly to try to trigger overflow
 	for i in 0..<200 {
 		name := fmt.tprintf("ovf_{}.txt", i)
-		path, _ := filepath.join({dir, name}, context.temp_allocator)
+		path, _ := os.join_path({dir, name}, context.temp_allocator)
 		touch_file(path)
 	}
 
@@ -451,7 +451,7 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 	}
 
 	// Verify watcher still works after the burst
-	probe, _ := filepath.join({dir, "PROBE_OVERFLOW.txt"}, context.temp_allocator)
+	probe, _ := os.join_path({dir, "PROBE_OVERFLOW.txt"}, context.temp_allocator)
 	touch_file(probe)
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "PROBE_OVERFLOW")
