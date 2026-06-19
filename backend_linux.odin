@@ -78,10 +78,12 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 	if errno != .NONE {
 		return .Backend_Init_Failed
 	}
+	track_open(int(fd))
 	cs := to_cstring(w.path)
 	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
 	if errno2 != .NONE {
 		linux.close(fd)
+		track_close(int(fd))
 		return .Backend_Init_Failed
 	}
 	w.native.fd = fd
@@ -91,6 +93,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 
 backend_file_destroy :: proc(w: ^Watcher_File) {
 	linux.close(w.native.fd)
+	track_close(int(w.native.fd))
 }
 
 backend_file_get_event :: proc(w: ^Watcher_File) -> (Event, bool) {
@@ -117,10 +120,12 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 	if errno != .NONE {
 		return .Backend_Init_Failed
 	}
+	track_open(int(fd))
 	cs := to_cstring(w.path)
 	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
 	if errno2 != .NONE {
 		linux.close(fd)
+		track_close(int(fd))
 		return .Backend_Init_Failed
 	}
 	w.native.fd = fd
@@ -130,6 +135,7 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	linux.close(w.native.fd)
+	track_close(int(w.native.fd))
 }
 
 backend_dir_get_event :: proc(w: ^Watcher_Dir) -> (Event, bool) {
@@ -156,6 +162,7 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	if errno != .NONE {
 		return .Backend_Init_Failed
 	}
+	track_open(int(fd))
 	w.native.fd = fd
 	w.native.watches = make(map[int]string, w.allocator)
 	rec_add_watch(w, w.path)
@@ -167,6 +174,7 @@ backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
 	}
 	linux.close(w.native.fd)
+	track_close(int(w.native.fd))
 }
 
 backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {

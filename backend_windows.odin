@@ -104,22 +104,27 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 		nil,
 	)
 	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
+	track_open(int(uintptr(handle)))
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil {
 		windows.CloseHandle(handle)
 		return .Backend_Init_Failed
 	}
+	track_open(int(uintptr(event)))
 	overlapped := new(windows.OVERLAPPED, w.allocator)
 	overlapped.hEvent = event
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
 	if iocp == nil {
 		windows.CloseHandle(event)
+		track_close(int(uintptr(event)))
 		windows.CloseHandle(handle)
+		track_close(int(uintptr(handle)))
 		free(overlapped, w.allocator)
 		return .Backend_Init_Failed
 	}
+	track_open(int(uintptr(iocp)))
 
 	buf := make([]u8, 4096, w.allocator)
 	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
@@ -137,12 +142,15 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 backend_file_destroy :: proc(w: ^Watcher_File) {
 	if w.native.iocp != nil {
 		windows.CloseHandle(w.native.iocp)
+		track_close(int(uintptr(w.native.iocp)))
 	}
 	if w.native.event != nil {
 		windows.CloseHandle(w.native.event)
+		track_close(int(uintptr(w.native.event)))
 	}
 	if w.native.handle != nil {
 		windows.CloseHandle(w.native.handle)
+		track_close(int(uintptr(w.native.handle)))
 	}
 	if w.native.overlapped != nil {
 		free(w.native.overlapped, w.allocator)
@@ -183,22 +191,27 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 		nil,
 	)
 	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
+	track_open(int(uintptr(handle)))
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil {
 		windows.CloseHandle(handle)
 		return .Backend_Init_Failed
 	}
+	track_open(int(uintptr(event)))
 	overlapped := new(windows.OVERLAPPED, w.allocator)
 	overlapped.hEvent = event
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
 	if iocp == nil {
 		windows.CloseHandle(event)
+		track_close(int(uintptr(event)))
 		windows.CloseHandle(handle)
+		track_close(int(uintptr(handle)))
 		free(overlapped, w.allocator)
 		return .Backend_Init_Failed
 	}
+	track_open(int(uintptr(iocp)))
 
 	buf := make([]u8, 4096, w.allocator)
 	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
@@ -215,12 +228,15 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	if w.native.iocp != nil {
 		windows.CloseHandle(w.native.iocp)
+		track_close(int(uintptr(w.native.iocp)))
 	}
 	if w.native.event != nil {
 		windows.CloseHandle(w.native.event)
+		track_close(int(uintptr(w.native.event)))
 	}
 	if w.native.handle != nil {
 		windows.CloseHandle(w.native.handle)
+		track_close(int(uintptr(w.native.handle)))
 	}
 	if w.native.overlapped != nil {
 		free(w.native.overlapped, w.allocator)
@@ -261,22 +277,27 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 		nil,
 	)
 	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
+	track_open(int(uintptr(handle)))
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil {
 		windows.CloseHandle(handle)
 		return .Backend_Init_Failed
 	}
+	track_open(int(uintptr(event)))
 	overlapped := new(windows.OVERLAPPED, w.allocator)
 	overlapped.hEvent = event
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
 	if iocp == nil {
 		windows.CloseHandle(event)
+		track_close(int(uintptr(event)))
 		windows.CloseHandle(handle)
+		track_close(int(uintptr(handle)))
 		free(overlapped, w.allocator)
 		return .Backend_Init_Failed
 	}
+	track_open(int(uintptr(iocp)))
 
 	buf := make([]u8, 8192, w.allocator)
 	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), true, NOTIFY_FILTER, nil, overlapped, nil)
@@ -293,12 +314,15 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 	if w.native.iocp != nil {
 		windows.CloseHandle(w.native.iocp)
+		track_close(int(uintptr(w.native.iocp)))
 	}
 	if w.native.event != nil {
 		windows.CloseHandle(w.native.event)
+		track_close(int(uintptr(w.native.event)))
 	}
 	if w.native.handle != nil {
 		windows.CloseHandle(w.native.handle)
+		track_close(int(uintptr(w.native.handle)))
 	}
 	if w.native.overlapped != nil {
 		free(w.native.overlapped, w.allocator)
