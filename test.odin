@@ -83,8 +83,10 @@ collect_events :: proc(
 ) -> (events: [dynamic]Collected_Event, found: bool) {
 	events = make([dynamic]Collected_Event, 0, 16, context.temp_allocator)
 	deadline := time.time_to_unix(time.now()) + i64(timeout / time.Second) + 1
+	iterations: int
 	ev_loop: for time.time_to_unix(time.now()) < deadline {
 		batch := get_events(w)
+		iterations += 1
 		for &e in batch {
 			append(&events, Collected_Event{e.kind, strings.clone(e.path, context.temp_allocator)})
 			if predicate(&e) {
@@ -93,6 +95,9 @@ collect_events :: proc(
 			}
 		}
 		time.sleep(polling_interval)
+	}
+	if !found {
+		fmt.eprintf("  [debug] collect_events timed out after %v (%d iterations, %d events)\n", timeout, iterations, len(events))
 	}
 	return
 }

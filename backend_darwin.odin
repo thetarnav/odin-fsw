@@ -136,6 +136,7 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 	w.native.file = file
 	w.native.prev = make(map[string]File_Info, w.allocator)
 	snapshot_dir_by_name_alloc(w.path, &w.native.prev, w.allocator)
+	fmt.eprintf("  [debug] dir_init done: kq=%v fd=%d prev keys=%d\n", int(kq), fd, len(w.native.prev))
 	return .None
 }
 
