@@ -69,6 +69,12 @@ collect_events :: proc(
 	iterations: int
 	ev_loop: for time.time_to_unix(time.now()) < deadline {
 		batch := get_events(w)
+		defer {
+			for e in batch {
+				delete(e.path, context.allocator)
+			}
+			delete(batch)
+		}
 		iterations += 1
 		for &e in batch {
 			append(&events, Collected_Event{e.kind, strings.clone(e.path, context.temp_allocator)})

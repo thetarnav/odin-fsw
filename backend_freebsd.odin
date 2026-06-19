@@ -1,38 +1,38 @@
 // backend_freebsd.odin — FreeBSD backend using kqueue + EVFILT_VNODE.
 //
 // Platform-specific backend compiled only on FreeBSD.
-// Identical architecture to backend_darwin.odin — see that file for details.
+// Pull-based: each get_events call does a non-blocking kevent() read and
+// a snapshot diff, appending all events to the caller's dynamic array.
+//
+//   - Watcher_File: kqueue VNode watch on the file
+//   - Watcher_Dir:  kqueue VNode watch + snapshot diff for content changes
+//   - Watcher_Recursive: per-subdirectory fd registration with kqueue + snapshot diff
 
 package fsw
 
-import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:sys/kqueue"
 import "core:sys/posix"
 
-// === Platform-specific native data ===
-// The Native_* structs hold the kqueue fd, the open file fd, and (for
-// dir/recursive) snapshot state for diffing.
-
 Native_File :: struct {
-	kq:   posix.FD, // kqueue fd
-	fd:   int,      // file descriptor of the open target
-	file: ^os.File, // os.File handle
+	kq:   posix.FD,
+	fd:   int,
+	file: ^os.File,
 }
 
 Native_Dir :: struct {
 	kq:   posix.FD,
 	fd:   int,
 	file: ^os.File,
-	prev: map[string]File_Info, // snapshot keyed by entry name
+	prev: map[string]File_Info,
 }
 
 Native_Recursive :: struct {
 	kq:      posix.FD,
-	watches: map[int]string,                   // fd -> dir_path
-	prev:    map[string]map[string]File_Info,  // dir_path -> {entry_name -> File_Info}
+	watches: map[int]string,
+	prev:    map[string]map[string]File_Info,
 }
 
 kq_normalize :: proc(fflags: kqueue.VNode_Flags) -> Event_Kind {
@@ -43,8 +43,6 @@ kq_normalize :: proc(fflags: kqueue.VNode_Flags) -> Event_Kind {
 	return .Modified
 }
 
-// Zero timespec: passed to kevent so it returns immediately instead of
-// waiting forever (which is what nil timeout means on macOS/FreeBSD).
 NO_WAIT: posix.timespec
 
 // === Watcher_File ===
@@ -93,19 +91,8 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	track_end(w)
 }
 
-backend_file_get_event :: proc(w: ^Watcher_File) -> (Event, bool) {
-	if len(w.events) > 0 {
-		return pop(&w.events), true
-	}
-	return kqueue_read_file(w, &w.events, w.allocator, false)
-}
-
-backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
-	for e in w.events { delete(e.path, w.allocator) }
-	clear(&w.events)
-	_, _ = kqueue_read_file(w, &w.events, w.allocator, true)
-	if len(w.events) == 0 do return nil
-	return w.events[:]
+backend_file_get_events :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
+	kqueue_drain_file(w, out)
 }
 
 // === Watcher_Dir ===
@@ -158,19 +145,8 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	track_end(w)
 }
 
-backend_dir_get_event :: proc(w: ^Watcher_Dir) -> (Event, bool) {
-	if len(w.events) > 0 {
-		return pop(&w.events), true
-	}
-	return kqueue_read_dir(w, &w.events, w.allocator, false)
-}
-
-backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
-	for e in w.events { delete(e.path, w.allocator) }
-	clear(&w.events)
-	_, _ = kqueue_read_dir(w, &w.events, w.allocator, true)
-	if len(w.events) == 0 do return nil
-	return w.events[:]
+backend_dir_get_events :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
+	kqueue_drain_dir(w, out)
 }
 
 // === Watcher_Recursive ===
@@ -230,15 +206,15 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 }
 
 freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
+
 	cs, cs_err := strings.clone_to_cstring(dir, context.temp_allocator)
 	if cs_err != nil do return
 	fd := posix.open(cs, posix.O_Flags{})
 	if fd == posix.FD(-1) do return
-	fd_int := int(fd)
 	track_open(w, fd)
 
 	ev := kqueue.KEvent{
-		ident  = uintptr(fd_int),
+		ident  = uintptr(fd),
 		filter = .VNode,
 		flags  = {.Add, .Clear},
 	}
@@ -250,7 +226,7 @@ freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 		return
 	}
 
-	w.native.watches[fd_int] = strings.clone(dir, w.allocator)
+	w.native.watches[int(fd)] = strings.clone(dir, w.allocator)
 
 	dir_prev := make(map[string]File_Info, w.allocator)
 	snapshot_dir_by_name_alloc(dir, &dir_prev, w.allocator)
@@ -273,30 +249,15 @@ freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	}
 }
 
-backend_rec_get_event :: proc(w: ^Watcher_Recursive) -> (Event, bool) {
-	if len(w.events) > 0 {
-		return pop(&w.events), true
-	}
-	return kqueue_read_rec(w, &w.events, w.allocator, false)
-}
-
-backend_rec_get_events :: proc(w: ^Watcher_Recursive) -> []Event {
-	for e in w.events { delete(e.path, w.allocator) }
-	clear(&w.events)
-	_, _ = kqueue_read_rec(w, &w.events, w.allocator, true)
-	if len(w.events) == 0 do return nil
-	return w.events[:]
+backend_rec_get_events :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
+	kqueue_drain_rec(w, out)
 }
 
 // === Shared kqueue read helpers ===
-// These are duplicates of the Darwin helpers. They could be consolidated
-// into a single internal file with `when ODIN_OS` blocks, but the
-// duplication makes each platform self-contained.
 
 @(private)
-kqueue_read_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
+kqueue_drain_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
-	got_one: bool
 	for {
 		n, _ := kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 		if n <= 0 do break
@@ -305,152 +266,77 @@ kqueue_read_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event, allocator: mem.
 			fflags := ev.fflags.vnode
 			if fflags != {} {
 				kind := kq_normalize(fflags)
-				e := Event{kind = kind, path = strings.clone(w.path, allocator)}
-				if drain {
-					append(out, e)
-					got_one = true
-				} else {
-					return e, true
-				}
+				append(out, Event{kind = kind, path = strings.clone(w.path, w.allocator)})
 			}
 		}
-		if !drain do break
 	}
-	if !drain do return {}, false
-	return {}, got_one
 }
 
 @(private)
-kqueue_read_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
-	// Drain kqueue
+kqueue_drain_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 
-	// Snapshot diff
 	old := w.native.prev
-	current := make(map[string]File_Info, allocator)
-	snapshot_dir_by_name_alloc(w.path, &current, allocator)
+	current := make(map[string]File_Info, w.allocator)
+	snapshot_dir_by_name_alloc(w.path, &current, w.allocator)
 
-	got_one: bool
 	for name in old {
 		if _, ok := current[name]; !ok {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			e := Event{kind = .Removed, path = fullpath}
-			if drain {
-				append(out, e)
-				got_one = true
-			} else {
-				for k in current { delete(k, allocator) }
-				delete(current)
-				return e, true
-			}
+			fullpath := filepath.join({w.path, name}, w.allocator) or_continue
+			append(out, Event{kind = .Removed, path = fullpath})
 		}
 	}
 	for name, fi in current {
 		prev, ok := old[name]
 		if !ok {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			e := Event{kind = .Added, path = fullpath, is_dir = fi.is_dir}
-			if drain {
-				append(out, e)
-				got_one = true
-			} else {
-				for k in current { delete(k, allocator) }
-				delete(current)
-				return e, true
-			}
+			fullpath := filepath.join({w.path, name}, w.allocator) or_continue
+			append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
 		} else if fi.mtime != prev.mtime || fi.size != prev.size {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			e := Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir}
-			if drain {
-				append(out, e)
-				got_one = true
-			} else {
-				for k in current { delete(k, allocator) }
-				delete(current)
-				return e, true
-			}
+			fullpath := filepath.join({w.path, name}, w.allocator) or_continue
+			append(out, Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir})
 		}
 	}
 
-	// Commit
-	for k in old { delete(k, allocator) }
+	for k in old { delete(k, w.allocator) }
 	delete(old)
 	w.native.prev = current
-
-	if !drain do return {}, false
-	if got_one do return {}, true
-	return {}, false
 }
 
 @(private)
-kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
-	// Drain kqueue
+kqueue_drain_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
 	events: [64]kqueue.KEvent
 	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 
-	// Snapshot diff for all watched dirs
-	got_one: bool
-	first_event: Event
 	for dir_path, dir_prev in w.native.prev {
-		current := make(map[string]File_Info, allocator)
-		snapshot_dir_by_name_alloc(dir_path, &current, allocator)
+		current := make(map[string]File_Info, w.allocator)
+		snapshot_dir_by_name_alloc(dir_path, &current, w.allocator)
 
 		for name in dir_prev {
 			if _, ok := current[name]; !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
+				fullpath, join_err := filepath.join({dir_path, name}, w.allocator)
 				if join_err != nil { continue }
-				e := Event{kind = .Removed, path = fullpath}
-				if drain {
-					append(out, e)
-					got_one = true
-				} else if !got_one {
-					first_event = e
-					got_one = true
-				}
+				append(out, Event{kind = .Removed, path = fullpath})
 			}
 		}
 		for name, fi in current {
 			prev_fi, ok := dir_prev[name]
 			if !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
+				fullpath, join_err := filepath.join({dir_path, name}, w.allocator)
 				if join_err != nil { continue }
 				if fi.is_dir {
 					freebsd_rec_add_watch(w, fullpath)
 				}
-				e := Event{kind = .Added, path = fullpath, is_dir = fi.is_dir}
-				if drain {
-					append(out, e)
-					got_one = true
-				} else if !got_one {
-					first_event = e
-					got_one = true
-				}
+				append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
 			} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
+				fullpath, join_err := filepath.join({dir_path, name}, w.allocator)
 				if join_err != nil { continue }
-				e := Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir}
-				if drain {
-					append(out, e)
-					got_one = true
-				} else if !got_one {
-					first_event = e
-					got_one = true
-				}
+				append(out, Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir})
 			}
 		}
 
-		for k in dir_prev { delete(k, allocator) }
+		for k in dir_prev { delete(k, w.allocator) }
 		delete(dir_prev)
 		w.native.prev[dir_path] = current
 	}
-
-	if drain {
-		if got_one do return {}, true
-		return {}, false
-	}
-	if got_one {
-		return first_event, true
-	}
-	return {}, false
 }

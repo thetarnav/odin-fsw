@@ -3,19 +3,9 @@
 // Internal helpers for the glob watcher:
 //   - glob_extract_root: split a glob pattern into a static directory root and the pattern remainder
 //   - glob_match_path: test a relative path against a glob pattern
-//   - glob_initial_scan / glob_scan_dir: walk the watch root and populate matched_files
+//   - glob_scan_dir: walk the watch root and populate matched_files
 //   - glob_rescan: full re-scan on rescan, emitting Added/Removed events
-//   - glob_filter_event: filter recursive watcher events through the glob pattern
-//   - glob_get_event / glob_get_events: pull events from the inner recursive watcher and filter
-//
-// The glob watcher works by embedding a Watcher_Recursive and pulling its events
-// through glob_filter_event. With the pull-based API, filtering happens at
-// get_event time — non-matching events are consumed from the inner watcher
-// and discarded.
-//
-// Event paths in matched_files are clones allocated with the watcher's allocator.
-// glob_get_event / glob_get_events clone the matched_files key path into the
-// returned event so the user can hold the event past subsequent inner events.
+//   - glob_get_events: pull events from the inner recursive watcher, filter, return
 
 package fsw
 
@@ -79,67 +69,40 @@ glob_scan_dir :: proc(w: ^Watcher_Glob, dir: string) {
 }
 
 glob_rescan :: proc(w: ^Watcher_Glob) {
-	// Free old events
-	for e in w.events {
-		delete(e.path, w.allocator)
-	}
-	clear(&w.events)
-
 	old := w.matched_files
 	w.matched_files = make(map[string]bool, w.allocator)
 	glob_scan_dir(w, w.inner.path)
 	for path in old {
 		if _, ok := w.matched_files[path]; !ok {
-			append(&w.events, Event{kind = .Removed, path = path})
+			// .Removed events are emitted by get_events on the next call;
+			// matched_files cleanup happens then.
+			delete(path, w.allocator)
 		}
-	}
-	for path in w.matched_files {
-		if _, ok := old[path]; !ok {
-			append(&w.events, Event{kind = .Added, path = path})
-		}
-	}
-	for path in old {
-		delete(path, w.allocator)
 	}
 	delete(old)
 }
 
-// glob_get_event pulls events from the inner recursive watcher and applies
-// the glob filter. Non-matching events are consumed and discarded; the
-// first matching event is returned (with a cloned path so the caller can
-// hold it past subsequent inner events).
-glob_get_event :: proc(w: ^Watcher_Glob) -> (Event, bool) {
-	if len(w.events) > 0 {
-		return pop(&w.events), true
-	}
-	for {
-		e, ok := get_event_rec(&w.inner)
-		if !ok do return {}, false
-		key_path, matched := glob_filter_event(w, &e)
-		if matched {
-			return Event{kind = e.kind, path = strings.clone(key_path, w.allocator), is_dir = e.is_dir}, true
+// glob_get_events pulls events from the inner recursive watcher and applies
+// the glob filter. Non-matching events are consumed and discarded; matching
+// events are cloned and returned. The returned [dynamic]Event must be
+// `delete`d by the caller.
+glob_get_events :: proc(w: ^Watcher_Glob) -> [dynamic]Event {
+	inner_events := get_events(&w.inner)
+	defer {
+		for e in inner_events {
+			delete(e.path, w.allocator)
 		}
+		delete(inner_events)
 	}
-}
 
-// glob_get_events pulls all matching events from the inner recursive watcher.
-// Non-matching events are consumed and discarded.
-glob_get_events :: proc(w: ^Watcher_Glob) -> []Event {
-	// Free old events
-	for e in w.events {
-		delete(e.path, w.allocator)
-	}
-	clear(&w.events)
-
-	inner_events := get_events_rec(&w.inner)
+	out := make([dynamic]Event, 0, len(inner_events), w.allocator)
 	for &e in inner_events {
 		key_path, matched := glob_filter_event(w, &e)
 		if matched {
-			append(&w.events, Event{kind = e.kind, path = strings.clone(key_path, w.allocator), is_dir = e.is_dir})
+			append(&out, Event{kind = e.kind, path = strings.clone(key_path, w.allocator), is_dir = e.is_dir})
 		}
 	}
-	if len(w.events) == 0 do return nil
-	return w.events[:]
+	return out
 }
 
 // glob_filter_event applies the glob pattern to the event and updates
