@@ -4,12 +4,18 @@
 //   - glob_extract_root: split a glob pattern into a static directory root and the pattern remainder
 //   - glob_match_path: test a relative path against a glob pattern
 //   - glob_initial_scan / glob_scan_dir: walk the watch root and populate matched_files
-//   - glob_rescan: full re-scan on rescan, emitting Added/Removed events for changes
+//   - glob_rescan: full re-scan on rescan, emitting Added/Removed events
 //   - glob_filter_event: filter recursive watcher events through the glob pattern
-//   - glob_inner_callback: no-op placeholder (actual filtering happens in backend threads)
+//   - glob_get_event / glob_get_events: pull events from the inner recursive watcher and filter
 //
-// The glob watcher works by embedding a Watcher_Recursive and routing its events
-// through glob_filter_event. The backend thread checks user_data to decide routing.
+// The glob watcher works by embedding a Watcher_Recursive and pulling its events
+// through glob_filter_event. With the pull-based API, filtering happens at
+// get_event time — non-matching events are consumed from the inner watcher
+// and discarded.
+//
+// Event paths in matched_files are clones allocated with the watcher's allocator.
+// glob_get_event / glob_get_events clone the matched_files key path into the
+// returned event so the user can hold the event past subsequent inner events.
 
 package fsw
 
@@ -18,7 +24,6 @@ import "core:path/filepath"
 import "core:strings"
 
 glob_extract_root :: proc(pattern: string) -> (root: string, remainder: string) {
-	// Find the longest static prefix before the first wildcard.
 	i := 0
 	for i < len(pattern) {
 		c := pattern[i]
@@ -26,7 +31,6 @@ glob_extract_root :: proc(pattern: string) -> (root: string, remainder: string) 
 			break
 		}
 		if c == '/' || c == '\\' {
-			// Include the separator in the root
 			i += 1
 			continue
 		}
@@ -36,7 +40,6 @@ glob_extract_root :: proc(pattern: string) -> (root: string, remainder: string) 
 		return ".", pattern
 	}
 	root = pattern[:i]
-	// Trim trailing separator
 	if len(root) > 0 && (root[len(root)-1] == '/' || root[len(root)-1] == '\\') {
 		root = root[:len(root)-1]
 	}
@@ -76,19 +79,23 @@ glob_scan_dir :: proc(w: ^Watcher_Glob, dir: string) {
 }
 
 glob_rescan :: proc(w: ^Watcher_Glob) {
+	// Free old events
+	for e in w.events {
+		delete(e.path, w.allocator)
+	}
+	clear(&w.events)
+
 	old := w.matched_files
 	w.matched_files = make(map[string]bool, w.allocator)
 	glob_scan_dir(w, w.inner.path)
 	for path in old {
 		if _, ok := w.matched_files[path]; !ok {
-			e := Event{kind = .Removed, path = path}
-			invoke_callback_glob(w, &e)
+			append(&w.events, Event{kind = .Removed, path = path})
 		}
 	}
 	for path in w.matched_files {
 		if _, ok := old[path]; !ok {
-			e := Event{kind = .Added, path = path}
-			invoke_callback_glob(w, &e)
+			append(&w.events, Event{kind = .Added, path = path})
 		}
 	}
 	for path in old {
@@ -97,47 +104,81 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 	delete(old)
 }
 
-// === Internal callback used by the recursive watcher thread ===
-// This is called from inotify_rec_thread when user_data is non-nil.
-// It filters events through the glob pattern.
+// glob_get_event pulls events from the inner recursive watcher and applies
+// the glob filter. Non-matching events are consumed and discarded; the
+// first matching event is returned (with a cloned path so the caller can
+// hold it past subsequent inner events).
+glob_get_event :: proc(w: ^Watcher_Glob) -> (Event, bool) {
+	if len(w.events) > 0 {
+		return pop(&w.events), true
+	}
+	for {
+		e, ok := get_event_rec(&w.inner)
+		if !ok do return {}, false
+		key_path, matched := glob_filter_event(w, &e)
+		if matched {
+			return Event{kind = e.kind, path = strings.clone(key_path, w.allocator), is_dir = e.is_dir}, true
+		}
+	}
+}
 
-glob_filter_event :: proc(gw: ^Watcher_Glob, event: ^Event) {
+// glob_get_events pulls all matching events from the inner recursive watcher.
+// Non-matching events are consumed and discarded.
+glob_get_events :: proc(w: ^Watcher_Glob) -> []Event {
+	// Free old events
+	for e in w.events {
+		delete(e.path, w.allocator)
+	}
+	clear(&w.events)
+
+	inner_events := get_events_rec(&w.inner)
+	for &e in inner_events {
+		key_path, matched := glob_filter_event(w, &e)
+		if matched {
+			append(&w.events, Event{kind = e.kind, path = strings.clone(key_path, w.allocator), is_dir = e.is_dir})
+		}
+	}
+	if len(w.events) == 0 do return nil
+	return w.events[:]
+}
+
+// glob_filter_event applies the glob pattern to the event and updates
+// w.matched_files. Returns the (possibly stable) path key from matched_files
+// to use as the event's path, and whether the event matches the pattern.
+// The returned key_path is owned by matched_files and remains valid until
+// that key is removed.
+glob_filter_event :: proc(gw: ^Watcher_Glob, event: ^Event) -> (key_path: string, matched: bool) {
 	rel, rel_err := filepath.rel(gw.inner.path, event.path, context.temp_allocator)
-	if rel_err != nil do return
+	if rel_err != nil do return "", false
 
 	#partial switch event.kind {
 	case .Added:
 		if !event.is_dir && glob_match_path(gw.pattern, rel) {
 			path_clone := strings.clone(event.path, gw.allocator)
 			gw.matched_files[path_clone] = true
-			e := Event{kind = .Added, path = path_clone}
-			invoke_callback_glob(gw, &e)
+			return path_clone, true
 		}
 	case .Removed:
 		for key in gw.matched_files {
 			if key == event.path {
 				delete_key(&gw.matched_files, key)
 				delete(key, gw.allocator)
-				e := Event{kind = .Removed, path = event.path}
-				invoke_callback_glob(gw, &e)
-				break
+				return key, true
 			}
 		}
 	case .Modified:
 		if _, ok := gw.matched_files[event.path]; ok {
-			e := Event{kind = .Modified, path = event.path}
-			invoke_callback_glob(gw, &e)
+			return event.path, true
 		}
 	case .Renamed:
 		for key in gw.matched_files {
 			if key == event.path {
 				delete_key(&gw.matched_files, key)
 				delete(key, gw.allocator)
-				e := Event{kind = .Removed, path = event.path}
-				invoke_callback_glob(gw, &e)
-				break
+				return key, true
 			}
 		}
 	case:
 	}
+	return "", false
 }

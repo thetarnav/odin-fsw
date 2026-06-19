@@ -5,77 +5,8 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-import "core:sync"
 import "core:testing"
 import "core:time"
-
-// === Event collector ===
-
-Collected_Event :: struct {
-	kind: Event_Kind,
-	path: string,
-}
-
-Collector :: struct {
-	mu:     sync.Mutex,
-	events: [dynamic]Collected_Event,
-}
-
-collector_init :: proc(c: ^Collector) {
-	c.events = make([dynamic]Collected_Event, 0, 64, context.temp_allocator)
-}
-
-collector_cb :: proc(event: ^Event) {
-	c := (^Collector)(context.user_ptr)
-	if c == nil do return
-	sync.mutex_lock(&c.mu)
-	path_copy := strings.clone(event.path, context.temp_allocator)
-	append(&c.events, Collected_Event{event.kind, path_copy})
-	sync.mutex_unlock(&c.mu)
-}
-
-collector_clear :: proc(c: ^Collector) {
-	sync.mutex_lock(&c.mu)
-	clear(&c.events)
-	sync.mutex_unlock(&c.mu)
-}
-
-collector_wait :: proc(c: ^Collector, min_count: int, timeout: time.Duration) -> bool {
-	deadline := time.time_to_unix(time.now()) + i64(timeout / time.Second) + 1
-	for time.time_to_unix(time.now()) < deadline {
-		sync.mutex_lock(&c.mu)
-		n := len(c.events)
-		sync.mutex_unlock(&c.mu)
-		if n >= min_count {
-			return true
-		}
-		time.sleep(10 * time.Millisecond)
-	}
-	return false
-}
-
-collector_has_kind_path :: proc(c: ^Collector, kind: Event_Kind, path_substr: string) -> bool {
-	sync.mutex_lock(&c.mu)
-	defer sync.mutex_unlock(&c.mu)
-	for ev in c.events {
-		if ev.kind == kind && strings.contains(ev.path, path_substr) {
-			return true
-		}
-	}
-	return false
-}
-
-collector_count_kind :: proc(c: ^Collector, kind: Event_Kind) -> int {
-	count := 0
-	sync.mutex_lock(&c.mu)
-	defer sync.mutex_unlock(&c.mu)
-	for ev in c.events {
-		if ev.kind == kind {
-			count += 1
-		}
-	}
-	return count
-}
 
 // === Test helpers ===
 
@@ -122,6 +53,50 @@ touch_file :: proc(path: string) {
 	write_file(path, "hello")
 }
 
+// === Poll-and-collect helper ===
+//
+// Drives a watcher for up to `timeout` duration, accumulating events into
+// `collected`. The predicate decides which events are interesting. Stops
+// as soon as the predicate returns true.
+
+Event_Collector :: struct {
+	mu:     Mutex_Stub,
+	events: [dynamic]Collected_Event,
+}
+
+Collected_Event :: struct {
+	kind: Event_Kind,
+	path: string,
+}
+
+@(private)
+Mutex_Stub :: struct {} // no-op stand-in so we can reuse the struct layout
+
+// collect_events drives the watcher in a loop until timeout or found.
+// `polling_interval` is how long to sleep between get_events calls.
+collect_events :: proc(
+	t: ^testing.T,
+	w: $T,
+	timeout: time.Duration,
+	polling_interval: time.Duration,
+	predicate: proc(e: ^Event) -> bool,
+) -> (events: [dynamic]Collected_Event, found: bool) {
+	events = make([dynamic]Collected_Event, 0, 16, context.temp_allocator)
+	deadline := time.time_to_unix(time.now()) + i64(timeout / time.Second) + 1
+	ev_loop: for time.time_to_unix(time.now()) < deadline {
+		batch := get_events(w)
+		for &e in batch {
+			append(&events, Collected_Event{e.kind, strings.clone(e.path, context.temp_allocator)})
+			if predicate(&e) {
+				found = true
+				break ev_loop
+			}
+		}
+		time.sleep(polling_interval)
+	}
+	return
+}
+
 // === Tests ===
 
 @(test)
@@ -132,29 +107,26 @@ test_poll_file_watcher :: proc(t: ^testing.T) {
 	filepath_a := join_path(dir, "a.txt")
 	touch_file(filepath_a)
 
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
+	w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_file_poll error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
 
-	// Allow watcher to take initial snapshot
-	time.sleep(150 * time.Millisecond)
-	collector_clear(&c)
-
 	// 1. Modify file
 	write_file(filepath_a, "modified content")
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "modify: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Modified, "a.txt"), "modify: no Modified event")
-	collector_clear(&c)
+	events, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Modified && strings.contains(e.path, "a.txt")
+	})
+	testing.expect(t, found, "modify: timeout")
+	testing.expect(t, len(events) > 0, "modify: no events")
 
 	// 2. Delete file
 	os.remove(filepath_a)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "delete: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Removed, "a.txt"), "delete: no Removed event")
+	events, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Removed && strings.contains(e.path, "a.txt")
+	})
+	testing.expect(t, found, "delete: timeout")
+	testing.expect(t, len(events) > 0, "delete: no events")
 }
 
 @(test)
@@ -162,35 +134,35 @@ test_poll_dir_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "poll_dir")
 	defer remove_all(dir)
 
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_dir_poll(dir, collector_cb, 50 * time.Millisecond)
+	w, err := watch_dir_poll(dir, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_dir_poll error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
 
-	time.sleep(150 * time.Millisecond)
-	collector_clear(&c)
-
 	// 1. Create file
 	file_a := join_path(dir, "new.txt")
 	touch_file(file_a)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "create: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "new.txt"), "create: no Added event")
-	collector_clear(&c)
+	events, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Added && strings.contains(e.path, "new.txt")
+	})
+	testing.expect(t, found, "create: timeout")
+	testing.expect(t, len(events) > 0, "create: no events")
 
 	// 2. Modify file
 	write_file(file_a, "changed")
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "modify: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Modified, "new.txt"), "modify: no Modified event")
-	collector_clear(&c)
+	events, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Modified && strings.contains(e.path, "new.txt")
+	})
+	testing.expect(t, found, "modify: timeout")
+	testing.expect(t, len(events) > 0, "modify: no events")
 
 	// 3. Delete file
 	os.remove(file_a)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "delete: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Removed, "new.txt"), "delete: no Removed event")
+	events, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Removed && strings.contains(e.path, "new.txt")
+	})
+	testing.expect(t, found, "delete: timeout")
+	testing.expect(t, len(events) > 0, "delete: no events")
 }
 
 @(test)
@@ -198,41 +170,46 @@ test_poll_recursive_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "poll_rec")
 	defer remove_all(dir)
 
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_dir_poll_recursive(dir, collector_cb, 50 * time.Millisecond)
+	w, err := watch_dir_poll_recursive(dir, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_dir_poll_recursive error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
 
-	time.sleep(150 * time.Millisecond)
-	collector_clear(&c)
-
 	// 1. Create subdir + file in subdir
 	subdir := join_path(dir, "sub")
 	os.mkdir(subdir)
-	time.sleep(100 * time.Millisecond)
 
 	nested_file := join_path(subdir, "deep.txt")
 	touch_file(nested_file)
 
-	testing.expect(t, collector_wait(&c, 2, 3 * time.Second), "recursive create: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "sub"), "subdir create: no Added event")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "deep.txt"), "nested file create: no Added event")
-	collector_clear(&c)
+	events, found := collect_events(t, w, 3 * time.Second, 50 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Added && strings.contains(e.path, "deep.txt")
+	})
+	testing.expect(t, found, "nested create: timeout")
+
+	// Also check subdir was reported
+	has_subdir := false
+	for ev in events {
+		if ev.kind == .Added && strings.contains(ev.path, "sub") {
+			has_subdir = true
+			break
+		}
+	}
+	testing.expect(t, has_subdir, "subdir create: no Added event")
 
 	// 2. Modify nested file
 	write_file(nested_file, "updated deep content")
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested modify: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Modified, "deep.txt"), "nested modify: no Modified event")
-	collector_clear(&c)
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Modified && strings.contains(e.path, "deep.txt")
+	})
+	testing.expect(t, found, "nested modify: timeout")
 
 	// 3. Delete nested file
 	os.remove(nested_file)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested delete: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Removed, "deep.txt"), "nested delete: no Removed event")
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Removed && strings.contains(e.path, "deep.txt")
+	})
+	testing.expect(t, found, "nested delete: timeout")
 }
 
 @(test)
@@ -243,28 +220,24 @@ test_inotify_file_watcher :: proc(t: ^testing.T) {
 	filepath_a := join_path(dir, "a.txt")
 	touch_file(filepath_a)
 
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_file(filepath_a, collector_cb)
+	w, err := watch_file(filepath_a)
 	testing.expectf(t, err == .None, "watch_file error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
 
-	time.sleep(100 * time.Millisecond)
-	collector_clear(&c)
-
 	// 1. Modify file
 	write_file(filepath_a, "modified inotify")
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "modify: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Modified, "a.txt"), "modify: no Modified event")
-	collector_clear(&c)
+	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Modified && strings.contains(e.path, "a.txt")
+	})
+	testing.expect(t, found, "modify: timeout")
 
 	// 2. Delete file
 	os.remove(filepath_a)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "delete: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Removed, "a.txt"), "delete: no Removed event")
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Removed && strings.contains(e.path, "a.txt")
+	})
+	testing.expect(t, found, "delete: timeout")
 }
 
 @(test)
@@ -272,29 +245,25 @@ test_inotify_dir_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "inotify_dir")
 	defer remove_all(dir)
 
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_dir(dir, collector_cb)
+	w, err := watch_dir(dir)
 	testing.expectf(t, err == .None, "watch_dir error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
 
-	time.sleep(100 * time.Millisecond)
-	collector_clear(&c)
-
 	// 1. Create file
 	file_a := join_path(dir, "test.txt")
 	touch_file(file_a)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "create: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "test.txt"), "create: no Added event")
-	collector_clear(&c)
+	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Added && strings.contains(e.path, "test.txt")
+	})
+	testing.expect(t, found, "create: timeout")
 
 	// 2. Delete file
 	os.remove(file_a)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "delete: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Removed, "test.txt"), "delete: no Removed event")
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Removed && strings.contains(e.path, "test.txt")
+	})
+	testing.expect(t, found, "delete: timeout")
 }
 
 @(test)
@@ -302,44 +271,41 @@ test_inotify_recursive_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "inotify_rec")
 	defer remove_all(dir)
 
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_dir_recursive(dir, collector_cb)
+	w, err := watch_dir_recursive(dir)
 	testing.expectf(t, err == .None, "watch_dir_recursive error: %v", err)
-	if err != nil do return
+	if err != nil { return }
 	defer destroy(w)
-
-	time.sleep(100 * time.Millisecond)
-	collector_clear(&c)
 
 	// 1. Create subdir
 	subdir := join_path(dir, "sub")
 	os.mkdir(subdir)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "subdir create: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "sub"), "subdir create: no Added event")
-	collector_clear(&c)
+	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Added && strings.contains(e.path, "sub")
+	})
+	testing.expect(t, found, "subdir create: timeout")
 
 	// 2. Create file in subdir (auto-watched by recursive)
 	nested := join_path(subdir, "nested.txt")
 	touch_file(nested)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested create: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "nested.txt"), "nested create: no Added event")
-	collector_clear(&c)
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Added && strings.contains(e.path, "nested.txt")
+	})
+	testing.expect(t, found, "nested create: timeout")
 
 	// 3. Modify nested file
-	// Small delay so snapshot-based backends capture the file at its initial size
-	time.sleep(150 * time.Millisecond)
+	time.sleep(50 * time.Millisecond)
 	write_file(nested, "updated")
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested modify: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Modified, "nested.txt"), "nested modify: no Modified event")
-	collector_clear(&c)
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Modified && strings.contains(e.path, "nested.txt")
+	})
+	testing.expect(t, found, "nested modify: timeout")
 
 	// 4. Delete nested file
 	os.remove(nested)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "nested delete: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Removed, "nested.txt"), "nested delete: no Removed event")
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Removed && strings.contains(e.path, "nested.txt")
+	})
+	testing.expect(t, found, "nested delete: timeout")
 }
 
 @(test)
@@ -351,52 +317,45 @@ test_glob_watcher :: proc(t: ^testing.T) {
 	pre_existing := join_path(dir, "pre.txt")
 	write_file(pre_existing, "existing")
 
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
 	pattern := join_path(dir, "*.txt")
-	w, err := watch_glob(pattern, collector_cb)
+	w, err := watch_glob(pattern)
 	testing.expectf(t, err == .None, "watch_glob error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
 
-	time.sleep(200 * time.Millisecond)
-	collector_clear(&c)
-
 	// 1. Create a new .txt file (should match)
 	new_txt := join_path(dir, "new.txt")
 	write_file(new_txt, "hello")
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching create: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "new.txt"), "matching create: no Added event")
-	collector_clear(&c)
+	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Added && strings.contains(e.path, "new.txt")
+	})
+	testing.expect(t, found, "matching create: timeout")
 
 	// 2. Create a .log file (should NOT match *.txt)
+	// We just verify no event with .log comes through within a short window.
 	new_log := join_path(dir, "test.log")
 	write_file(new_log, "log data")
-	time.sleep(300 * time.Millisecond)
-	sync.mutex_lock(&c.mu)
-	log_count := 0
-	for ev in c.events {
-		if strings.contains(ev.path, ".log") {
-			log_count += 1
-		}
+	events, _ := collect_events(t, w, 300 * time.Millisecond, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return false // never match
+	})
+	for ev in events {
+		testing.expect(t, !strings.contains(ev.path, ".log"), "non-matching .log file leaked an event")
 	}
-	sync.mutex_unlock(&c.mu)
-	testing.expect_value(t, log_count, 0)
-	collector_clear(&c)
 
 	// 3. Modify the .txt file (should match)
-	time.sleep(150 * time.Millisecond)
+	time.sleep(50 * time.Millisecond)
 	write_file(new_txt, "modified")
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching modify: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Modified, "new.txt"), "matching modify: no Modified event")
-	collector_clear(&c)
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Modified && strings.contains(e.path, "new.txt")
+	})
+	testing.expect(t, found, "matching modify: timeout")
 
 	// 4. Delete the .txt file (should match)
 	os.remove(new_txt)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "matching delete: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Removed, "new.txt"), "matching delete: no Removed event")
+	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Removed && strings.contains(e.path, "new.txt")
+	})
+	testing.expect(t, found, "matching delete: timeout")
 }
 
 @(test)
@@ -404,17 +363,10 @@ test_stress_many_files :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "stress_many")
 	defer remove_all(dir)
 
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_dir(dir, collector_cb)
+	w, err := watch_dir(dir)
 	testing.expectf(t, err == .None, "watch_dir error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
-
-	time.sleep(100 * time.Millisecond)
-	collector_clear(&c)
 
 	// Create 50 files rapidly
 	for i in 0..<50 {
@@ -423,16 +375,25 @@ test_stress_many_files :: proc(t: ^testing.T) {
 		touch_file(path)
 	}
 
-	// Wait for all events to arrive and settle
-	collector_wait(&c, 50, 5 * time.Second)
-	time.sleep(500 * time.Millisecond)
-	collector_clear(&c)
+	// Count how many Added events we see for 5 seconds
+	events, _ := collect_events(t, w, 5 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return false // never match
+	})
+	added_count := 0
+	for ev in events {
+		if ev.kind == .Added && strings.contains(ev.path, "stress_") {
+			added_count += 1
+		}
+	}
+	testing.expect(t, added_count >= 50, fmt.tprintf("expected at least 50 Added events, got %d", added_count))
 
 	// Verify watcher is still alive — create one more file with a unique name
 	probe := join_path(dir, "PROBE_AFTER_STRESS.txt")
 	touch_file(probe)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "post-stress probe: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "PROBE_AFTER_STRESS"), "post-stress probe: not detected")
+	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Added && strings.contains(e.path, "PROBE_AFTER_STRESS")
+	})
+	testing.expect(t, found, "post-stress probe: timeout")
 }
 
 @(test)
@@ -445,59 +406,34 @@ test_stress_rapid_lifecycle :: proc(t: ^testing.T) {
 
 	// Create and destroy 20 watchers rapidly
 	for i in 0..<20 {
-		w, err := watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
+		w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
 		testing.expectf(t, err == .None, "rapid lifecycle %d: error %v", i, err)
 		if err != nil { return }
 		destroy(w)
 	}
 
 	// Final watcher should still work
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_file_poll(filepath_a, collector_cb, 50 * time.Millisecond)
+	w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "final watcher error: %v", err)
 	if err != nil { return }
 	defer destroy(w)
 
-	time.sleep(150 * time.Millisecond)
-	collector_clear(&c)
-
 	write_file(filepath_a, "after rapid lifecycle")
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "final modify: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Modified, "lifecycle.txt"), "final modify: no Modified event")
+	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Modified && strings.contains(e.path, "lifecycle.txt")
+	})
+	testing.expect(t, found, "final modify: timeout")
 }
-
-// Overflow tracking globals
-_overflow_received: bool
-_overflow_mu: sync.Mutex
 
 @(test)
 test_overflow_tracking :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "overflow")
 	defer remove_all(dir)
 
-	overflow_cb :: proc(event: ^Event) {
-		if event.kind == .Overflow {
-			sync.mutex_lock(&_overflow_mu)
-			_overflow_received = true
-			sync.mutex_unlock(&_overflow_mu)
-		}
-		collector_cb(event)
-	}
-
-	c: Collector
-	collector_init(&c)
-	context.user_ptr = &c
-
-	w, err := watch_dir(dir, overflow_cb)
+	w, err := watch_dir(dir)
 	testing.expectf(t, err == .None, "watch_dir error: %v", err)
-	if err != nil do return
+	if err != nil { return }
 	defer destroy(w)
-
-	time.sleep(100 * time.Millisecond)
-	collector_clear(&c)
 
 	// Create many files rapidly to try to trigger overflow
 	for i in 0..<200 {
@@ -506,12 +442,16 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 		touch_file(path)
 	}
 
-	collector_wait(&c, 50, 5 * time.Second)
-
-	sync.mutex_lock(&_overflow_mu)
-	had_overflow := _overflow_received
-	sync.mutex_unlock(&_overflow_mu)
-
+	events, _ := collect_events(t, w, 5 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return false
+	})
+	had_overflow := false
+	for ev in events {
+		if ev.kind == .Overflow {
+			had_overflow = true
+			break
+		}
+	}
 	if had_overflow {
 		fmt.println("  INFO: overflow event delivered")
 	} else {
@@ -519,10 +459,10 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 	}
 
 	// Verify watcher still works after the burst
-	time.sleep(500 * time.Millisecond)
-	collector_clear(&c)
 	probe := join_path(dir, "PROBE_OVERFLOW.txt")
 	touch_file(probe)
-	testing.expect(t, collector_wait(&c, 1, 2 * time.Second), "post-burst probe: timeout")
-	testing.expect(t, collector_has_kind_path(&c, .Added, "PROBE_OVERFLOW"), "post-burst probe: not detected")
+	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		return e.kind == .Added && strings.contains(e.path, "PROBE_OVERFLOW")
+	})
+	testing.expect(t, found, "post-burst probe: timeout")
 }

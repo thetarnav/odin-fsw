@@ -38,13 +38,36 @@ file_stat :: proc(path: string) -> (fi: File_Info, err: Error) {
 	}, .None
 }
 
+// file_stat_alloc stats a path using the provided allocator. The caller is
+// responsible for freeing the returned os.File_Info via os.file_info_delete.
+file_stat_alloc :: proc(path: string, allocator: mem.Allocator) -> (os.File_Info, Error) {
+	info, e := os.stat(path, allocator)
+	if e != nil {
+		return {}, .Invalid_Path
+	}
+	return info, .None
+}
+
 // snapshot_dir populates a map with File_Info entries for all files in a directory.
 snapshot_dir :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
-	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	snapshot_dir_alloc(dir, prev, allocator)
+}
+
+// snapshot_dir_alloc populates a map with File_Info entries for all files in a directory.
+// All allocations use the provided allocator. Callers are responsible for freeing
+// the map keys.
+snapshot_dir_alloc :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
+	entries, err := os.read_all_directory_by_path(dir, allocator)
 	if err != nil do return
+	defer {
+		for entry in entries {
+			os.file_info_delete(entry, allocator)
+		}
+		delete(entries)
+	}
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." do continue
-		fullpath := filepath.join({dir, entry.name}, context.temp_allocator) or_continue
+		fullpath := filepath.join({dir, entry.name}, allocator) or_continue
 		prev[fullpath] = File_Info{
 			is_dir = entry.type == .Directory,
 			size   = entry.size,
@@ -56,15 +79,31 @@ snapshot_dir :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Al
 
 // snapshot_recursive populates a map with File_Info entries for all files in a directory tree.
 snapshot_recursive :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
-	snapshot_dir(dir, prev, allocator)
-	// Snapshot subdirs
-	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	snapshot_recursive_alloc(dir, prev, allocator)
+}
+
+// snapshot_recursive_alloc populates a map with File_Info entries for all files in a
+// directory tree. All allocations use the provided allocator.
+snapshot_recursive_alloc :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
+	entries, err := os.read_all_directory_by_path(dir, allocator)
 	if err != nil do return
+	defer {
+		for entry in entries {
+			os.file_info_delete(entry, allocator)
+		}
+		delete(entries)
+	}
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." do continue
+		fullpath := filepath.join({dir, entry.name}, allocator) or_continue
+		prev[fullpath] = File_Info{
+			is_dir = entry.type == .Directory,
+			size   = entry.size,
+			mtime  = entry.modification_time,
+			inode  = entry.inode,
+		}
 		if entry.type == .Directory {
-			subdir := filepath.join({dir, entry.name}, context.temp_allocator) or_continue
-			snapshot_recursive(subdir, prev, allocator)
+			snapshot_recursive_alloc(fullpath, prev, allocator)
 		}
 	}
 }
