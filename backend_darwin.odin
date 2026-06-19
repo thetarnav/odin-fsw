@@ -59,20 +59,22 @@ NO_WAIT: posix.timespec
 
 backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
 
+	track_start(w)
+
 	file, os_err := os.open(w.path, os.O_RDONLY)
 	if os_err != nil do return .Backend_Init_Failed
-	track_open(file)
+	track_open(w, file)
 	defer if err != nil {
 		os.close(file)
-		track_close(file)
+		track_close(w, file)
 	}
 
 	kq, errno := kqueue.kqueue()
 	if errno != .NONE do return .Backend_Init_Failed
-	track_open(kq)
+	track_open(w, kq)
 	defer if err != nil {
 		posix.close(kq)
-		track_close(kq)
+		track_close(w, kq)
 	}
 
 	ev := kqueue.KEvent{
@@ -92,9 +94,10 @@ backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
 
 backend_file_destroy :: proc(w: ^Watcher_File) {
 	posix.close(w.native.kq)
-	track_close(w.native.kq)
+	track_close(w, w.native.kq)
 	os.close(w.native.file)
-	track_close(w.native.file)
+	track_close(w, w.native.file)
+	track_end(w)
 }
 
 backend_file_get_event :: proc(w: ^Watcher_File) -> (Event, bool) {
@@ -116,20 +119,22 @@ backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
 
 backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
 
+	track_start(w)
+
 	file, os_err := os.open(w.path, os.O_RDONLY)
 	if os_err != nil do return .Backend_Init_Failed
-	track_open(file)
+	track_open(w, file)
 	defer if err != nil {
 		os.close(file)
-		track_close(file)
+		track_close(w, file)
 	}
 
 	kq, errno := kqueue.kqueue()
 	if errno != .NONE do return .Backend_Init_Failed
-	track_open(kq)
+	track_open(w, kq)
 	defer if err != nil {
 		posix.close(kq)
-		track_close(kq)
+		track_close(w, kq)
 	}
 
 	ev := kqueue.KEvent{
@@ -152,11 +157,12 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
 
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	posix.close(w.native.kq)
-	track_close(w.native.kq)
+	track_close(w, w.native.kq)
 	os.close(w.native.file)
-	track_close(w.native.file)
+	track_close(w, w.native.file)
 	for k in w.native.prev do delete(k, w.allocator)
 	delete(w.native.prev)
+	track_end(w)
 }
 
 backend_dir_get_event :: proc(w: ^Watcher_Dir) -> (Event, bool) {
@@ -178,9 +184,11 @@ backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
 
 backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 
+	track_start(w)
+
 	kq, errno := kqueue.kqueue()
 	if errno != .NONE do return .Backend_Init_Failed
-	track_open(kq)
+	track_open(w, kq)
 
 	w.native.kq      = kq
 	w.native.watches = make(map[int]string, w.allocator)
@@ -193,11 +201,12 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 
 backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 	posix.close(w.native.kq)
-	track_close(w.native.kq)
+	track_close(w, w.native.kq)
 	for fd_key in w.native.watches {
 		posix.close(posix.FD(fd_key))
-		track_close(fd_key)
+		track_close(w, fd_key)
 	}
+	track_end(w)
 }
 
 backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
@@ -217,7 +226,7 @@ backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
 backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 	for fd_key in w.native.watches {
 		posix.close(posix.FD(fd_key))
-		track_close(fd_key)
+		track_close(w, fd_key)
 	}
 	for _, v in w.native.watches do delete(v, w.allocator)
 	clear(&w.native.watches)
@@ -237,7 +246,7 @@ darwin_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 
 	fd := posix.open(cs, posix.O_Flags{})
 	if fd == posix.FD(-1) do return
-	track_open(fd)
+	track_open(w, fd)
 
 	ev := kqueue.KEvent{
 		ident  = uintptr(fd),
@@ -248,7 +257,7 @@ darwin_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	_, errno2 := kqueue.kevent(w.native.kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE {
 		posix.close(fd)
-		track_close(fd)
+		track_close(w, fd)
 		return
 	}
 
