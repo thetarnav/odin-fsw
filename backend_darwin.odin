@@ -54,6 +54,10 @@ kq_normalize :: proc(fflags: kqueue.VNode_Flags) -> Event_Kind {
 	return .Modified
 }
 
+// Zero timespec: passed to kevent so it returns immediately instead of
+// waiting forever (which is what nil timeout means on macOS).
+NO_WAIT: posix.timespec
+
 // === Watcher_File ===
 
 backend_file_init :: proc(w: ^Watcher_File) -> Error {
@@ -273,7 +277,7 @@ kqueue_read_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event, allocator: mem.
 	events: [1]kqueue.KEvent
 	got_one: bool
 	for {
-		n, _ := kqueue.kevent(w.native.kq, nil, events[:], nil)
+		n, _ := kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 		if n <= 0 do break
 		ev := events[0]
 		if ev.filter == .VNode {
@@ -330,7 +334,7 @@ dir_diff :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Allocator
 kqueue_read_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
 	// Drain kqueue (kqueue VNode catches some events but not content changes)
 	events: [1]kqueue.KEvent
-	_, _ = kqueue.kevent(w.native.kq, nil, events[:], nil)
+	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 
 	// Save state in case we need to abort and restore
 	old := w.native.prev
@@ -433,7 +437,7 @@ rec_diff :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: mem.All
 kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
 	// Drain kqueue
 	events: [64]kqueue.KEvent
-	_, _ = kqueue.kevent(w.native.kq, nil, events[:], nil)
+	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 
 	// Snapshot diff for all watched dirs
 	got_one: bool
