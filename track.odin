@@ -1,6 +1,7 @@
 // track.odin — Test-only handle/resource tracking.
-// Uses the built-in memory tracking feature of odin's testing framework
-// to track unclosed os resources. os.open() -> os.close()
+// Watchers have a map [os handle -> open call location]
+// Each open() call expects one close() call otherwise it errors
+// tracking muse be started with track_start and ended with track_end
 
 #+private package
 package fsw

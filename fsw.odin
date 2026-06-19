@@ -101,19 +101,19 @@ Watcher_Glob :: struct {
 // Call get_event or get_events to receive events.
 // Call destroy(w) when done.
 watch_file :: proc(path: string, allocator := context.allocator) -> (^Watcher_File, Error) {
+
 	p, err := filepath.abs(path, allocator)
-	if err != nil {
-		return nil, .Invalid_Path
-	}
-	w := new(Watcher_File, allocator)
-	if w == nil {
-		return nil, .Backend_Init_Failed
-	}
+	if err != nil do return nil, .Invalid_Path
+
+	w, new_err := new(Watcher_File, allocator)
+	if new_err != nil do return nil, .Backend_Init_Failed
+
 	w^ = Watcher_File{
 		path      = p,
 		allocator = allocator,
 		events    = make([dynamic]Event, 0, 16, allocator),
 	}
+
 	e := backend_file_init(w)
 	if e != .None {
 		delete(w.events)
@@ -121,6 +121,7 @@ watch_file :: proc(path: string, allocator := context.allocator) -> (^Watcher_Fi
 		free(w, allocator)
 		return nil, e
 	}
+
 	return w, .None
 }
 
@@ -128,19 +129,19 @@ watch_file :: proc(path: string, allocator := context.allocator) -> (^Watcher_Fi
 // Initializes OS handles. Does NOT start a thread.
 // Only events in the immediate directory are reported.
 watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir, Error) {
+
 	p, err := filepath.abs(path, allocator)
-	if err != nil {
-		return nil, .Invalid_Path
-	}
-	w := new(Watcher_Dir, allocator)
-	if w == nil {
-		return nil, .Backend_Init_Failed
-	}
+	if err != nil do return nil, .Invalid_Path
+
+	w, new_err := new(Watcher_Dir, allocator)
+	if new_err != nil do return nil, .Backend_Init_Failed
+
 	w^ = Watcher_Dir{
 		path      = p,
 		allocator = allocator,
 		events    = make([dynamic]Event, 0, 16, allocator),
 	}
+
 	e := backend_dir_init(w)
 	if e != .None {
 		delete(w.events)
@@ -148,6 +149,7 @@ watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir
 		free(w, allocator)
 		return nil, e
 	}
+
 	return w, .None
 }
 
@@ -156,19 +158,19 @@ watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir
 // Subdirectories created after init are auto-watched when the OS reports an
 // .Added event for them on the next get_event call.
 watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
+
 	p, err := filepath.abs(path, allocator)
-	if err != nil {
-		return nil, .Invalid_Path
-	}
-	w := new(Watcher_Recursive, allocator)
-	if w == nil {
-		return nil, .Backend_Init_Failed
-	}
+	if err != nil do return nil, .Invalid_Path
+
+	w, new_err := new(Watcher_Recursive, allocator)
+	if new_err != nil do return nil, .Backend_Init_Failed
+
 	w^ = Watcher_Recursive{
 		path      = p,
 		allocator = allocator,
 		events    = make([dynamic]Event, 0, 16, allocator),
 	}
+
 	e := backend_rec_init(w)
 	if e != .None {
 		delete(w.events)
@@ -176,6 +178,7 @@ watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^W
 		free(w, allocator)
 		return nil, e
 	}
+
 	return w, .None
 }
 
@@ -184,25 +187,23 @@ watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^W
 // Each call performs a single stat() check; the user should sleep `latency`
 // between calls (e.g. time.sleep(latency) in their loop).
 watch_file_poll :: proc(path: string, latency: time.Duration, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
+
 	p, err := filepath.abs(path, allocator)
-	if err != nil {
-		return nil, .Invalid_Path
-	}
+	if err != nil do return nil, .Invalid_Path
+
 	os_fi, stat_err := os.stat(p, allocator)
-	if stat_err != nil {
-		return nil, .Invalid_Path
-	}
+	if stat_err != nil do return nil, .Invalid_Path
 	defer os.file_info_delete(os_fi, allocator)
+
 	fi := File_Info{
 		is_dir = os_fi.type == .Directory,
 		size   = os_fi.size,
 		mtime  = os_fi.modification_time,
 		inode  = os_fi.inode,
 	}
-	w := new(Watcher_File_Poll, allocator)
-	if w == nil {
-		return nil, .Backend_Init_Failed
-	}
+	w, new_err := new(Watcher_File_Poll, allocator)
+	if new_err != nil do return nil, .Backend_Init_Failed
+
 	w^ = Watcher_File_Poll{
 		path      = p,
 		allocator = allocator,
@@ -210,6 +211,7 @@ watch_file_poll :: proc(path: string, latency: time.Duration, allocator := conte
 		prev      = fi,
 		events    = make([dynamic]Event, 0, 4, allocator),
 	}
+
 	return w, .None
 }
 
@@ -217,16 +219,16 @@ watch_file_poll :: proc(path: string, latency: time.Duration, allocator := conte
 // No thread is started. Each get_event/get_events call performs a single
 // snapshot diff.
 watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
+
 	p, err := filepath.abs(path, allocator)
-	if err != nil {
-		return nil, .Invalid_Path
-	}
+	if err != nil do return nil, .Invalid_Path
+
 	prev := make(map[string]File_Info, allocator)
 	snapshot_dir_alloc(p, &prev, allocator)
-	w := new(Watcher_Dir_Poll, allocator)
-	if w == nil {
-		return nil, .Backend_Init_Failed
-	}
+
+	w, new_err := new(Watcher_Dir_Poll, allocator)
+	if new_err != nil do return nil, .Backend_Init_Failed
+
 	w^ = Watcher_Dir_Poll{
 		path      = p,
 		allocator = allocator,
@@ -234,6 +236,7 @@ watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := contex
 		prev      = prev,
 		events    = make([dynamic]Event, 0, 16, allocator),
 	}
+
 	return w, .None
 }
 
@@ -266,25 +269,25 @@ watch_dir_poll_recursive :: proc(path: string, latency: time.Duration, allocator
 // The directory is watched recursively; only files matching the pattern trigger events.
 // No thread is started. Performs an initial scan to detect pre-existing matching files.
 watch_glob :: proc(pattern: string, allocator := context.allocator) -> (^Watcher_Glob, Error) {
+
 	root, pat := glob_extract_root(pattern)
 	p, err := filepath.abs(root, allocator)
-	if err != nil {
-		return nil, .Invalid_Path
-	}
+	if err != nil do return nil, .Invalid_Path
+
 	w := new(Watcher_Glob, allocator)
-	if w == nil {
-		return nil, .Backend_Init_Failed
-	}
+	if w == nil do return nil, .Backend_Init_Failed
+
 	w^ = Watcher_Glob{
 		pattern   = pat,
 		allocator = allocator,
 		events    = make([dynamic]Event, 0, 16, allocator),
 	}
-	w.inner = Watcher_Recursive{
+	w.inner = {
 		path      = p,
 		allocator = allocator,
 		events    = make([dynamic]Event, 0, 16, allocator),
 	}
+
 	e := backend_rec_init(&w.inner)
 	if e != .None {
 		delete(w.inner.events)
@@ -293,9 +296,12 @@ watch_glob :: proc(pattern: string, allocator := context.allocator) -> (^Watcher
 		free(w, allocator)
 		return nil, e
 	}
+
 	w.matched_files = make(map[string]bool, allocator)
+
 	// initial scan
 	glob_scan_dir(w, w.inner.path)
+
 	return w, .None
 }
 
