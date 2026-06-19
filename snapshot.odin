@@ -112,8 +112,20 @@ snapshot_recursive_alloc :: proc(dir: string, prev: ^map[string]File_Info, alloc
 // Used by kqueue backends that detect changes via dir-level VNode events
 // and need to diff by filename.
 snapshot_dir_by_name :: proc(dir: string, prev: ^map[string]File_Info) {
-	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	snapshot_dir_by_name_alloc(dir, prev, context.temp_allocator)
+}
+
+// snapshot_dir_by_name_alloc is the same as snapshot_dir_by_name but uses the
+// given allocator. Callers are responsible for freeing the map keys.
+snapshot_dir_by_name_alloc :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
+	entries, err := os.read_all_directory_by_path(dir, allocator)
 	if err != nil do return
+	defer {
+		for entry in entries {
+			os.file_info_delete(entry, allocator)
+		}
+		delete(entries)
+	}
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." do continue
 		prev[entry.name] = File_Info{
