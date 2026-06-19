@@ -367,17 +367,23 @@ test_stress_many_files :: proc(t: ^testing.T) {
 		touch_file(path)
 	}
 
-	// Count how many Added events we see for 5 seconds
-	events, _ := collect_events(t, w, 5 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
-		return false // never match
-	})
+	// Stop collecting as soon as we've seen 50 matching events. The
+	// counter is passed via context.user_ptr (Odin procs don't capture
+	// closures). Returning `true` from the predicate short-circuits
+	// the collect_events loop, so the test only takes as long as
+	// needed instead of always running out the full 5 s timeout.
 	added_count := 0
-	for ev in events {
-		if ev.kind == .Added && strings.contains(ev.path, "stress_") {
-			added_count += 1
+	context.user_ptr = &added_count
+	_, found_stress := collect_events(t, w, 5 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		cnt := cast(^int)context.user_ptr
+		if e.kind == .Added && strings.contains(e.path, "stress_") {
+			cnt^ += 1
+			return cnt^ >= 50
 		}
-	}
-	testing.expect(t, added_count >= 50, fmt.tprintf("expected at least 50 Added events, got %d", added_count))
+		return false
+	})
+	context.user_ptr = nil
+	testing.expect(t, found_stress, fmt.tprintf("stress: only saw %d Added events, expected >= 50", added_count))
 
 	// Verify watcher is still alive — create one more file with a unique name
 	probe, _ := os.join_path({dir, "PROBE_AFTER_STRESS.txt"}, context.temp_allocator)
@@ -434,16 +440,21 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 		touch_file(path)
 	}
 
-	events, _ := collect_events(t, w, 5 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+	// Look for an Overflow event, stopping as soon as one is seen. If
+	// none is seen, stop after ~500 events (the burst produced ~600 in
+	// practice) so the test doesn't sit idle for the full timeout. The
+	// counter is passed via context.user_ptr (Odin procs don't capture
+	// closures).
+	event_count := 0
+	context.user_ptr = &event_count
+	_, had_overflow := collect_events(t, w, 5 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
+		cnt := cast(^int)context.user_ptr
+		cnt^ += 1
+		if e.kind == .Overflow do return true
+		if cnt^ >= 500 do return true
 		return false
 	})
-	had_overflow := false
-	for ev in events {
-		if ev.kind == .Overflow {
-			had_overflow = true
-			break
-		}
-	}
+	context.user_ptr = nil
 	if had_overflow {
 		fmt.println("  INFO: overflow event delivered")
 	} else {
