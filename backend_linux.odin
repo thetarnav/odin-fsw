@@ -10,7 +10,8 @@
 //   - Recursive watcher: per-subdirectory inotify watches stored in w.native.watches
 //     (wd → dir_path). New subdirs are auto-watched on .Added events during read.
 //
-// Internal helpers: to_cstring, inotify_normalize, inotify_event_name, rec_add_watch
+// Internal helpers: to_cstring, inotify_normalize, inotify_event_name,
+// rec_add_watch, inotify_read, inotify_read_rec.
 
 package fsw
 

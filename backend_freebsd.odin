@@ -258,14 +258,17 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive) -> []Event {
 	return w.events[:]
 }
 
-// === Shared kqueue read helpers (re-use the darwin helpers via this file) ===
+// === Shared kqueue read helpers ===
+// These are duplicates of the Darwin helpers. They could be consolidated
+// into a single internal file with `when ODIN_OS` blocks, but the
+// duplication makes each platform self-contained.
 
 @(private)
 kqueue_read_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
 	events: [1]kqueue.KEvent
 	got_one: bool
 	for {
-		n, _ := kqueue.kevent(w.native.kq, nil, events[:], nil)
+		n, _ := kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 		if n <= 0 do break
 		ev := events[0]
 		if ev.filter == .VNode {

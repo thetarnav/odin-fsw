@@ -5,7 +5,7 @@
 //                      Watcher_File_Poll, Watcher_Dir_Poll, Watcher_Recursive_Poll, Watcher_Glob)
 //   - constructor procs (watch_file, watch_dir, watch_dir_recursive,
 //                        watch_file_poll, watch_dir_poll, watch_dir_poll_recursive, watch_glob)
-//   - get_event and get_events procedure groups (accept any watcher type)
+//   - get_event / get_events procedure groups (accept any watcher type)
 //   - destroy procedure group (accepts any watcher type)
 //   - rescan procedure group (for recursive and glob watchers)
 //
@@ -41,8 +41,7 @@ Watcher_Dir :: struct {
 
 // Watcher_Recursive watches a directory and all its subdirectories.
 // Allocates a map to track per-subdirectory watches. New subdirectories
-// are automatically watched when detected. The user_data field is reserved
-// for internal use by Watcher_Glob.
+// are automatically watched when detected.
 Watcher_Recursive :: struct {
 	path:      string,
 	allocator: mem.Allocator,
@@ -151,8 +150,8 @@ watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir
 
 // watch_dir_recursive creates a native watcher for a directory tree.
 // Initializes OS handles and registers all subdirectories. Does NOT start a thread.
-// Subdirectories created after init are detected on the next get_event call
-// (which rescans the tree).
+// Subdirectories created after init are auto-watched when the OS reports an
+// .Added event for them on the next get_event call.
 watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
@@ -220,7 +219,7 @@ watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := contex
 		return nil, .Invalid_Path
 	}
 	prev := make(map[string]File_Info, allocator)
-	snapshot_dir(p, &prev, allocator)
+	snapshot_dir_alloc(p, &prev, allocator)
 	w := new(Watcher_Dir_Poll, allocator)
 	if w == nil {
 		return nil, .Backend_Init_Failed
@@ -244,7 +243,7 @@ watch_dir_poll_recursive :: proc(path: string, latency: time.Duration, allocator
 		return nil, .Invalid_Path
 	}
 	prev := make(map[string]File_Info, allocator)
-	snapshot_recursive(p, &prev, allocator)
+	snapshot_recursive_alloc(p, &prev, allocator)
 	w := new(Watcher_Recursive_Poll, allocator)
 	if w == nil {
 		return nil, .Backend_Init_Failed
@@ -331,8 +330,7 @@ destroy_rec :: proc(w: ^Watcher_Recursive) {
 		delete(e.path, w.allocator)
 	}
 	delete(w.events)
-	// Free native.watches map keys (the maps themselves are freed by the backend)
-	cleanup_recursive_native(w)
+	backend_rec_native_cleanup(w)
 	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
@@ -390,7 +388,7 @@ destroy_glob :: proc(w: ^Watcher_Glob) {
 		delete(e.path, w.allocator)
 	}
 	delete(w.inner.events)
-	cleanup_recursive_native(&w.inner)
+	backend_rec_native_cleanup(&w.inner)
 	delete(w.inner.path, w.allocator)
 	for path in w.matched_files {
 		delete(path, w.allocator)
@@ -409,14 +407,6 @@ destroy :: proc {
 	destroy_dir_poll,
 	destroy_rec_poll,
 	destroy_glob,
-}
-
-// cleanup_recursive_native frees platform-specific native data for a
-// Watcher_Recursive. This is called from destroy_rec / destroy_glob after
-// the backend has done its own cleanup (e.g. closed fds). The actual
-// implementation is in each platform's backend file.
-cleanup_recursive_native :: proc {
-	backend_rec_native_cleanup,
 }
 
 // === get_event / get_events ===
@@ -438,15 +428,6 @@ get_event_dir :: proc(w: ^Watcher_Dir) -> (Event, bool) {
 get_event_rec :: proc(w: ^Watcher_Recursive) -> (Event, bool) {
 	return backend_rec_get_event(w)
 }
-
-// get_event_file_poll returns the next event from a Watcher_File_Poll.
-// (Implementation in backend_poll.odin.)
-
-// get_event_dir_poll returns the next event from a Watcher_Dir_Poll.
-// (Implementation in backend_poll.odin.)
-
-// get_event_rec_poll returns the next event from a Watcher_Recursive_Poll.
-// (Implementation in backend_poll.odin.)
 
 // get_event_glob returns the next event from a Watcher_Glob.
 // Internally calls get_event on the embedded recursive watcher and filters
@@ -485,15 +466,6 @@ get_events_rec :: proc(w: ^Watcher_Recursive) -> []Event {
 	return backend_rec_get_events(w)
 }
 
-// get_events_file_poll returns all available events from a Watcher_File_Poll.
-// (Implementation in backend_poll.odin.)
-
-// get_events_dir_poll returns all available events from a Watcher_Dir_Poll.
-// (Implementation in backend_poll.odin.)
-
-// get_events_rec_poll returns all available events from a Watcher_Recursive_Poll.
-// (Implementation in backend_poll.odin.)
-
 // get_events_glob returns all available events from a Watcher_Glob.
 get_events_glob :: proc(w: ^Watcher_Glob) -> []Event {
 	return glob_get_events(w)
@@ -522,7 +494,7 @@ rescan_rec :: proc(w: ^Watcher_Recursive) -> Error {
 rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error {
 	delete(w.prev)
 	w.prev = make(map[string]File_Info, w.allocator)
-	snapshot_recursive(w.path, &w.prev, w.allocator)
+	snapshot_recursive_alloc(w.path, &w.prev, w.allocator)
 	return .None
 }
 

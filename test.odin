@@ -204,8 +204,8 @@ test_poll_recursive_watcher :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_inotify_file_watcher :: proc(t: ^testing.T) {
-	dir := make_temp_dir(t, "inotify_file")
+test_native_file_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "native_file")
 	defer remove_all(dir)
 
 	filepath_a, _ := os.join_path({dir, "a.txt"}, context.temp_allocator)
@@ -232,8 +232,8 @@ test_inotify_file_watcher :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_inotify_dir_watcher :: proc(t: ^testing.T) {
-	dir := make_temp_dir(t, "inotify_dir")
+test_native_dir_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "native_dir")
 	defer remove_all(dir)
 
 	w, err := watch_dir(dir)
@@ -258,8 +258,8 @@ test_inotify_dir_watcher :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_inotify_recursive_watcher :: proc(t: ^testing.T) {
-	dir := make_temp_dir(t, "inotify_rec")
+test_native_recursive_watcher :: proc(t: ^testing.T) {
+	dir := make_temp_dir(t, "native_rec")
 	defer remove_all(dir)
 
 	w, err := watch_dir_recursive(dir)

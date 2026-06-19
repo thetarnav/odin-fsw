@@ -15,7 +15,6 @@
 
 package fsw
 
-import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
@@ -141,7 +140,6 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 	w.native.file = file
 	w.native.prev = make(map[string]File_Info, w.allocator)
 	snapshot_dir_by_name_alloc(w.path, &w.native.prev, w.allocator)
-	fmt.eprintf("  [debug] dir_init done: kq=%v fd=%d prev keys=%d\n", int(kq), fd, len(w.native.prev))
 	return .None
 }
 
@@ -299,37 +297,6 @@ kqueue_read_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event, allocator: mem.
 	return {}, got_one
 }
 
-// dir_diff fills `out` with the snapshot diff events for a Watcher_Dir.
-// Replaces w.native.prev with the new snapshot.
-@(private)
-dir_diff :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Allocator) {
-	old := w.native.prev
-	current := make(map[string]File_Info, allocator)
-	snapshot_dir_by_name_alloc(w.path, &current, allocator)
-
-	for name in old {
-		if _, ok := current[name]; !ok {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			append(out, Event{kind = .Removed, path = fullpath})
-		}
-	}
-	for name, fi in current {
-		prev, ok := old[name]
-		if !ok {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
-		} else if fi.mtime != prev.mtime || fi.size != prev.size {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			append(out, Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir})
-		}
-	}
-
-	// Free old keys and replace prev
-	for k in old { delete(k, allocator) }
-	delete(old)
-	w.native.prev = current
-}
-
 @(private)
 kqueue_read_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
 	// Drain kqueue (kqueue VNode catches some events but not content changes)
@@ -398,42 +365,6 @@ kqueue_read_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event, allocator: mem.Al
 // Watcher_Recursive. Replaces w.native.prev[dir] with the new snapshot for
 // each dir.
 @(private)
-rec_diff :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: mem.Allocator) {
-	for dir_path, dir_prev in w.native.prev {
-		current := make(map[string]File_Info, allocator)
-		snapshot_dir_by_name_alloc(dir_path, &current, allocator)
-
-		for name in dir_prev {
-			if _, ok := current[name]; !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
-				if join_err != nil { continue }
-				append(out, Event{kind = .Removed, path = fullpath})
-			}
-		}
-		for name, fi in current {
-			prev_fi, ok := dir_prev[name]
-			if !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
-				if join_err != nil { continue }
-				// Auto-watch new subdirs BEFORE emitting event to avoid race
-				if fi.is_dir {
-					darwin_rec_add_watch(w, fullpath)
-				}
-				append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
-			} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
-				if join_err != nil { continue }
-				append(out, Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir})
-			}
-		}
-
-		for k in dir_prev { delete(k, allocator) }
-		delete(dir_prev)
-		w.native.prev[dir_path] = current
-	}
-}
-
-@(private)
 kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: mem.Allocator, drain: bool) -> (Event, bool) {
 	// Drain kqueue
 	events: [64]kqueue.KEvent
@@ -446,7 +377,6 @@ kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: 
 		current := make(map[string]File_Info, allocator)
 		snapshot_dir_by_name_alloc(dir_path, &current, allocator)
 
-		dir_had_event := false
 		for name in dir_prev {
 			if _, ok := current[name]; !ok {
 				fullpath, join_err := filepath.join({dir_path, name}, allocator)
@@ -455,7 +385,6 @@ kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: 
 				if drain {
 					append(out, e)
 					got_one = true
-					dir_had_event = true
 				} else if !got_one {
 					first_event = e
 					got_one = true
@@ -474,7 +403,6 @@ kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: 
 				if drain {
 					append(out, e)
 					got_one = true
-					dir_had_event = true
 				} else if !got_one {
 					first_event = e
 					got_one = true
@@ -486,7 +414,6 @@ kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: 
 				if drain {
 					append(out, e)
 					got_one = true
-					dir_had_event = true
 				} else if !got_one {
 					first_event = e
 					got_one = true
@@ -495,7 +422,6 @@ kqueue_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event, allocator: 
 		}
 
 		// Always commit the new snapshot for this dir (we've already done the read)
-		_ = dir_had_event
 		for k in dir_prev { delete(k, allocator) }
 		delete(dir_prev)
 		w.native.prev[dir_path] = current
