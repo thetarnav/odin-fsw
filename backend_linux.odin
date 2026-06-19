@@ -14,6 +14,7 @@
 
 package fsw
 
+import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
@@ -96,7 +97,7 @@ backend_file_get_event :: proc(w: ^Watcher_File) -> (Event, bool) {
 	if len(w.events) > 0 {
 		return pop(&w.events), true
 	}
-	return inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, false)
+	return inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, drain=false)
 }
 
 backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
@@ -104,7 +105,7 @@ backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
 		delete(e.path, w.allocator)
 	}
 	clear(&w.events)
-	_, _ = inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, true)
+	inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, drain=true)
 	if len(w.events) == 0 do return nil
 	return w.events[:]
 }
@@ -135,7 +136,7 @@ backend_dir_get_event :: proc(w: ^Watcher_Dir) -> (Event, bool) {
 	if len(w.events) > 0 {
 		return pop(&w.events), true
 	}
-	return inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, false)
+	return inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, drain=false)
 }
 
 backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
@@ -143,7 +144,7 @@ backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
 		delete(e.path, w.allocator)
 	}
 	clear(&w.events)
-	_, _ = inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, true)
+	inotify_read(w.native.fd, w.native.wd, w.path, &w.events, w.allocator, drain=true)
 	if len(w.events) == 0 do return nil
 	return w.events[:]
 }
@@ -209,7 +210,7 @@ backend_rec_get_event :: proc(w: ^Watcher_Recursive) -> (Event, bool) {
 	if len(w.events) > 0 {
 		return pop(&w.events), true
 	}
-	return inotify_read_rec(w, &w.events, w.allocator, false)
+	return inotify_read_rec(w, drain=false)
 }
 
 backend_rec_get_events :: proc(w: ^Watcher_Recursive) -> []Event {
@@ -217,7 +218,7 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive) -> []Event {
 		delete(e.path, w.allocator)
 	}
 	clear(&w.events)
-	_, _ = inotify_read_rec(w, &w.events, w.allocator, true)
+	inotify_read_rec(w, drain=true)
 	if len(w.events) == 0 do return nil
 	return w.events[:]
 }
@@ -235,9 +236,8 @@ inotify_read :: proc(
 	out: ^[dynamic]Event,
 	allocator: mem.Allocator,
 	drain: bool,
-) -> (Event, bool) {
+) -> (e: Event, got_one: bool) {
 	buf: [INOTIFY_BUF_SIZE]byte
-	got_one: bool
 	for {
 		n, errno := linux.read(fd, buf[:])
 		if errno == .EAGAIN || n <= 0 {
@@ -246,48 +246,35 @@ inotify_read :: proc(
 		offset := 0
 		for offset < n {
 			event := (^linux.Inotify_Event)(&buf[offset])
-			if event.wd == target_wd {
-				name := inotify_event_name(event)
-				kind := inotify_normalize(event.mask)
-				path: string
-				if name != "" {
-					path, _ = filepath.join({parent_path, name}, allocator)
-				} else {
-					path = strings.clone(parent_path, allocator)
-				}
-				e := Event{
-					kind   = kind,
-					path   = path,
-					is_dir = .ISDIR in event.mask,
-				}
-				if drain {
-					append(out, e)
-					got_one = true
-				} else {
-					return e, true
-				}
-			}
-			offset += size_of(linux.Inotify_Event) + int(event.len)
+			defer offset += size_of(linux.Inotify_Event) + int(event.len)
+
+			if event.wd != target_wd do continue
+
+            e.is_dir = .ISDIR in event.mask
+            e.kind = inotify_normalize(event.mask)
+            if name := inotify_event_name(event); name != "" {
+                e.path, _ = filepath.join({parent_path, name}, allocator)
+            } else {
+                e.path = strings.clone(parent_path, allocator)
+            }
+
+            got_one = true
+            if drain {
+                append(out, e)
+            } else {
+                return
+            }
 		}
 		if !drain do break
 	}
-	if !drain {
-		return {}, false
-	}
-	return {}, got_one
+    return
 }
 
 // inotify_read_rec reads from a recursive watcher's inotify fd. Handles multiple
 // watch descriptors. New subdirectories are auto-watched on .Added events.
 @(private)
-inotify_read_rec :: proc(
-	w: ^Watcher_Recursive,
-	out: ^[dynamic]Event,
-	allocator: mem.Allocator,
-	drain: bool,
-) -> (Event, bool) {
+inotify_read_rec :: proc (w: ^Watcher_Recursive, drain: bool) -> (e: Event, got_one: bool) {
 	buf: [INOTIFY_BUF_SIZE]byte
-	got_one: bool
 	for {
 		n, errno := linux.read(w.native.fd, buf[:])
 		if errno == .EAGAIN || n <= 0 {
@@ -296,39 +283,31 @@ inotify_read_rec :: proc(
 		offset := 0
 		for offset < n {
 			event := (^linux.Inotify_Event)(&buf[offset])
-			name := inotify_event_name(event)
-			dir_path, ok := w.native.watches[int(event.wd)]
-			if ok {
-				kind := inotify_normalize(event.mask)
-				path: string
-				if name != "" {
-					path, _ = filepath.join({dir_path, name}, allocator)
-				} else {
-					path = strings.clone(dir_path, allocator)
-				}
-				is_dir := .ISDIR in event.mask
-				// Auto-watch new subdirs BEFORE emitting event to avoid race
-				if kind == .Added && is_dir {
-					rec_add_watch(w, path)
-				}
-				e := Event{
-					kind   = kind,
-					path   = path,
-					is_dir = is_dir,
-				}
-				if drain {
-					append(out, e)
-					got_one = true
-				} else {
-					return e, true
-				}
-			}
-			offset += size_of(linux.Inotify_Event) + int(event.len)
+			defer offset += size_of(linux.Inotify_Event) + int(event.len)
+
+            e.kind = inotify_normalize(event.mask)
+
+            dir_path := w.native.watches[int(event.wd)] or_continue
+            if name := inotify_event_name(event); name != "" {
+                e.path, _ = filepath.join({dir_path, name}, w.allocator)
+            } else {
+                e.path = strings.clone(dir_path, w.allocator)
+            }
+
+            // Auto-watch new subdirs BEFORE emitting event to avoid race
+            e.is_dir = .ISDIR in event.mask
+            if e.kind == .Added && e.is_dir {
+                rec_add_watch(w, e.path)
+            }
+
+            got_one = true
+            if drain {
+                append(&w.events, e)
+            } else {
+                return
+            }
 		}
 		if !drain do break
 	}
-	if !drain {
-		return {}, false
-	}
-	return {}, got_one
+    return
 }
