@@ -15,6 +15,7 @@
 
 package fsw
 
+import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
