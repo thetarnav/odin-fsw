@@ -53,12 +53,12 @@ Native_Recursive :: struct {
 
 @(private)
 NOTIFY_FILTER :: (
-    windows.FILE_NOTIFY_CHANGE_FILE_NAME |
-    windows.FILE_NOTIFY_CHANGE_DIR_NAME |
-    windows.FILE_NOTIFY_CHANGE_SIZE |
-    windows.FILE_NOTIFY_CHANGE_LAST_WRITE |
-    windows.FILE_NOTIFY_CHANGE_ATTRIBUTES |
-    windows.FILE_NOTIFY_CHANGE_CREATION
+	windows.FILE_NOTIFY_CHANGE_FILE_NAME |
+	windows.FILE_NOTIFY_CHANGE_DIR_NAME |
+	windows.FILE_NOTIFY_CHANGE_SIZE |
+	windows.FILE_NOTIFY_CHANGE_LAST_WRITE |
+	windows.FILE_NOTIFY_CHANGE_ATTRIBUTES |
+	windows.FILE_NOTIFY_CHANGE_CREATION
 )
 
 @(private)
@@ -361,15 +361,15 @@ iocp_drain :: proc(w: ^$T, drain: bool) -> (first: Event, got_one: bool) {
 		if bytes > 0 {
 			entry := (^windows.FILE_NOTIFY_INFORMATION)(&buf[0])
 			for {
-                e: Event
-                matched: bool
-                when type_of(w) == ^Watcher_File {
-                    process_file_entry(entry, w, w.allocator)
-                } else when type_of(w) == ^Watcher_Dir {
-                    process_dir_entry(entry, w, w.allocator)
-                } else when type_of(w) == ^Watcher_Recursive {
-                    process_rec_entry(entry, w, w.allocator)
-                }
+				e: Event
+				matched: bool
+				when type_of(w) == ^Watcher_File {
+					e, matched = process_file_entry(entry, w, w.allocator)
+				} else when type_of(w) == ^Watcher_Dir {
+					e, matched = process_dir_entry(entry, w, w.allocator)
+				} else when type_of(w) == ^Watcher_Recursive {
+					e, matched = process_rec_entry(entry, w, w.allocator)
+				}
 
 				if matched {
 					if drain {
@@ -377,7 +377,7 @@ iocp_drain :: proc(w: ^$T, drain: bool) -> (first: Event, got_one: bool) {
 					} else if !got_one {
 						first = e
 					}
-                    got_one = true
+					got_one = true
 				}
 				if entry.next_entry_offset == 0 do break
 				entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
@@ -391,7 +391,7 @@ iocp_drain :: proc(w: ^$T, drain: bool) -> (first: Event, got_one: bool) {
 		if !drain do break
 	}
 
-    return
+	return
 }
 
 @(private)

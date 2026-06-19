@@ -249,24 +249,24 @@ inotify_read :: proc(
 
 			if event.wd != target_wd do continue
 
-            e.is_dir = .ISDIR in event.mask
-            e.kind = inotify_normalize(event.mask)
-            if name := inotify_event_name(event); name != "" {
-                e.path, _ = filepath.join({parent_path, name}, allocator)
-            } else {
-                e.path = strings.clone(parent_path, allocator)
-            }
+			e.is_dir = .ISDIR in event.mask
+			e.kind = inotify_normalize(event.mask)
+			if name := inotify_event_name(event); name != "" {
+				e.path, _ = filepath.join({parent_path, name}, allocator)
+			} else {
+				e.path = strings.clone(parent_path, allocator)
+			}
 
-            got_one = true
-            if drain {
-                append(out, e)
-            } else {
-                return
-            }
+			got_one = true
+			if drain {
+				append(out, e)
+			} else {
+				return
+			}
 		}
 		if !drain do break
 	}
-    return
+	return
 }
 
 // inotify_read_rec reads from a recursive watcher's inotify fd. Handles multiple
@@ -284,29 +284,29 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, drain: bool) -> (e: Event, got_
 			event := (^linux.Inotify_Event)(&buf[offset])
 			defer offset += size_of(linux.Inotify_Event) + int(event.len)
 
-            e.kind = inotify_normalize(event.mask)
+			e.kind = inotify_normalize(event.mask)
 
-            dir_path := w.native.watches[int(event.wd)] or_continue
-            if name := inotify_event_name(event); name != "" {
-                e.path, _ = filepath.join({dir_path, name}, w.allocator)
-            } else {
-                e.path = strings.clone(dir_path, w.allocator)
-            }
+			dir_path := w.native.watches[int(event.wd)] or_continue
+			if name := inotify_event_name(event); name != "" {
+				e.path, _ = filepath.join({dir_path, name}, w.allocator)
+			} else {
+				e.path = strings.clone(dir_path, w.allocator)
+			}
 
-            // Auto-watch new subdirs BEFORE emitting event to avoid race
-            e.is_dir = .ISDIR in event.mask
-            if e.kind == .Added && e.is_dir {
-                rec_add_watch(w, e.path)
-            }
+			// Auto-watch new subdirs BEFORE emitting event to avoid race
+			e.is_dir = .ISDIR in event.mask
+			if e.kind == .Added && e.is_dir {
+				rec_add_watch(w, e.path)
+			}
 
-            got_one = true
-            if drain {
-                append(&w.events, e)
-            } else {
-                return
-            }
+			got_one = true
+			if drain {
+				append(&w.events, e)
+			} else {
+				return
+			}
 		}
 		if !drain do break
 	}
-    return
+	return
 }

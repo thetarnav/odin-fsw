@@ -1,7 +1,6 @@
 #+test
 package fsw
 
-import "core:relative"
 import "core:fmt"
 import "core:os"
 import "core:strings"
