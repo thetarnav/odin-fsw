@@ -2,36 +2,56 @@
 
 Cross-platform file and directory watching library. Uses native backends where available (inotify on Linux, kqueue on macOS/FreeBSD, ReadDirectoryChangesW on Windows) with a polling fallback for all platforms.
 
-## Quick Start
+## Pull-Based API
+
+The library is **pull-based**: constructors create OS handles and prepare internal state but do not start threads. The user drives the event loop by calling `get_event` / `get_events` on a watcher.
 
 ```odin
 import fsw "odin-fsw"
 
-cb :: proc (event: ^fsw.Event) {
-    fmt.printf("%v: %s\n", event.kind, event.path)
-}
-
-w, err := fsw.watch_file("/tmp/test.txt", cb)
+// Create a native watcher for a directory. No thread is started.
+w, err := fsw.watch_dir("/tmp")
 assert(err == nil)
 defer fsw.destroy(w)
 
-// Watcher runs in a background thread. Events arrive via cb.
-time.sleep(5 * time.Second)
+// User-driven event loop. Each get_events call drains the OS queue
+// and returns a fresh slice of events.
+for {
+    for event in fsw.get_events(w) {
+        fmt.printf("%v: %s\n", event.kind, event.path)
+    }
+    time.sleep(100 * time.Millisecond)
+}
 ```
+
+If you only want one event at a time:
+
+```odin
+for {
+    event, ok := fsw.get_event(w)
+    if !ok {
+        time.sleep(100 * time.Millisecond)
+        continue
+    }
+    fmt.printf("%v: %s\n", event.kind, event.path)
+}
+```
+
+`get_event` returns the next buffered event (refilling from the OS on demand). `get_events` returns all events from a single OS read / poll cycle.
 
 ## Constructors
 
-All constructors return a heap-allocated pointer. Call `destroy` when done.
+All constructors return a heap-allocated pointer. Call `destroy` when done. None of the constructors take a callback or start a thread.
 
 | Constructor | Type | Backend | Alloc |
 |---|---|---|---|
-| `watch_file(path, cb)` | `^Watcher_File` | inotify/kqueue/IOCP | zero |
-| `watch_dir(path, cb)` | `^Watcher_Dir` | inotify/kqueue/IOCP | zero |
-| `watch_dir_recursive(path, cb)` | `^Watcher_Recursive` | inotify/kqueue/IOCP | map |
-| `watch_file_poll(path, cb, latency)` | `^Watcher_File_Poll` | polling | zero |
-| `watch_dir_poll(path, cb, latency)` | `^Watcher_Dir_Poll` | polling | map |
-| `watch_dir_poll_recursive(path, cb, latency)` | `^Watcher_Recursive_Poll` | polling | map |
-| `watch_glob(pattern, cb)` | `^Watcher_Glob` | recursive + filter | map |
+| `watch_file(path)` | `^Watcher_File` | inotify/kqueue/IOCP | zero |
+| `watch_dir(path)` | `^Watcher_Dir` | inotify/kqueue/IOCP | zero |
+| `watch_dir_recursive(path)` | `^Watcher_Recursive` | inotify/kqueue/IOCP | map |
+| `watch_file_poll(path, latency)` | `^Watcher_File_Poll` | polling | zero |
+| `watch_dir_poll(path, latency)` | `^Watcher_Dir_Poll` | polling | map |
+| `watch_dir_poll_recursive(path, latency)` | `^Watcher_Recursive_Poll` | polling | map |
+| `watch_glob(pattern)` | `^Watcher_Glob` | recursive + filter | map |
 
 All constructors accept an optional `allocator` parameter (defaults to `context.allocator`).
 
@@ -47,8 +67,8 @@ Use the OS-native notification mechanism. Preferred when available.
 
 Fallback for platforms without native support, or when latency-based polling is desired.
 
-- `watch_file_poll` — stat-based polling at the given `latency` interval.
-- `watch_dir_poll` — snapshot-based directory polling.
+- `watch_file_poll` — stat-based polling. The user drives polling by calling `get_event`/`get_events`; each call performs one `stat()`. The user should `time.sleep(latency)` between calls.
+- `watch_dir_poll` — snapshot-based directory polling. Each call does one snapshot diff.
 - `watch_dir_poll_recursive` — recursive snapshot-based polling.
 
 ### Glob watcher
@@ -59,7 +79,7 @@ Watches a directory recursively, filtering events through a glob pattern.
 w, _ := fsw.watch_glob("/tmp/*.txt", cb)
 ```
 
-The glob pattern must start with a directory prefix (e.g. `/tmp/*.txt`). The watcher extracts the static prefix as the watch root, then filters events through the pattern. Only files matching the pattern trigger callbacks.
+The glob pattern must start with a directory prefix (e.g. `/tmp/*.txt`). The watcher extracts the static prefix as the watch root, then filters events through the pattern. Only files matching the pattern trigger events.
 
 ## Events
 
@@ -71,6 +91,24 @@ Event :: struct {
     is_dir:   bool,        // True if the target is a directory
 }
 ```
+
+## Get Event
+
+Pull events from a watcher. `get_event` returns the next event, or `false` when no events are currently available. `get_events` returns all events from a single OS read / poll cycle.
+
+```odin
+event, ok := fsw.get_event(w)
+if ok {
+    fmt.printf("%v: %s\n", event.kind, event.path)
+}
+
+events := fsw.get_events(w)
+for event in events {
+    fmt.printf("%v: %s\n", event.kind, event.path)
+}
+```
+
+Both work with any watcher type via the procedure group.
 
 ## Destroy
 
@@ -90,25 +128,19 @@ err := fsw.rescan(w)  // works for ^Watcher_Recursive, ^Watcher_Recursive_Poll, 
 
 For non-recursive watchers, `rescan` is a no-op.
 
-## Watcher Union
-
-The `Watcher` union type can hold any watcher pointer. Useful when you don't care about the specific type:
-
-```odin
-w: fsw.Watcher
-w = w_file  // assign any ^Watcher_*
-fsw.destroy(&w)  // dispatches to the correct destroy proc
-```
-
 ## Gotchas
 
-### Callback context
+### Event path lifetime
 
-Watcher threads restore the caller's `context` (including `user_ptr`) before invoking your callback. You can set `context.user_ptr` before creating a watcher and read it inside the callback — it will be the same value.
+Event paths are allocated with the watcher's allocator and remain valid until the **next** call to `get_event` / `get_events` on the same watcher, or until `destroy` is called. If you need to keep a path past that point, clone it:
 
-### Path lifetime
-
-The `event.path` string passed to your callback is only valid during the callback invocation. If you need to keep it, clone it.
+```odin
+event, ok := fsw.get_event(w)
+if ok {
+    my_path := strings.clone(event.path, my_allocator)
+    // my_path is now yours to manage
+}
+```
 
 ### Glob pattern format
 
@@ -118,23 +150,29 @@ The `event.path` string passed to your callback is only valid during the callbac
 
 `watch_dir_recursive` and `watch_glob` allocate a map to track watched subdirectories. For very deep directory trees, this uses more memory than flat watchers.
 
-### Thread safety
+### User-driven polling
 
-**Callbacks run on the watcher's background thread, not your main thread.** This means your callback code executes concurrently with whatever your main thread is doing. If the callback accesses shared state (slices, maps, counters), you must synchronize access yourself:
+The library does not start any threads. For polling watchers, you control the poll cadence. The recommended pattern is:
 
 ```odin
-mu: sync.Mutex
-events: [dynamic]Event
-
-my_cb :: proc(e: ^Event) {
-    sync.mutex_lock(&mu)
-    append(&events, e^)
-    sync.mutex_unlock(&mu)
+for {
+    for event in fsw.get_events(w) {
+        handle(event)
+    }
+    time.sleep(latency)
 }
 ```
 
-Don't call `destroy` or `rescan` from inside a callback — it would deadlock trying to join the thread that's running the callback.
+For native watchers, `get_events` is non-blocking; sleep if you want to avoid a tight loop.
 
-### Thread-per-watcher model
+### Glob watcher event filtering
 
-Each native watcher creates a dedicated background thread. This is fine for a handful of watchers (1–10), but each thread costs ~8KB of stack space. If you need hundreds of watchers, consider using polling watchers (which share the main thread's time) or consolidating watches into fewer `watch_dir_recursive` calls.
+The glob watcher pulls events from an internal recursive watcher. Non-matching events are consumed but discarded, so a glob watcher is more efficient when most events would not match the pattern.
+
+### Rescan after external changes
+
+For Linux `watch_dir_recursive` and `watch_dir_recursive` on macOS/FreeBSD: if subdirectories are deleted out from under the watcher, `rescan` rebuilds the watch set. For Windows, `ReadDirectoryChangesW` with `bWatchSubtree=TRUE` tracks subdirectory changes automatically, so rescan is a no-op.
+
+### Path lifetime for glob events
+
+Events from `watch_glob` have paths that point into the watcher's internal `matched_files` map. They are stable as long as the file remains matched. If you need to keep the path past a subsequent `get_event`/`get_events` call, clone it.
