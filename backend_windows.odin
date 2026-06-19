@@ -302,7 +302,8 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive) -> []Event {
 
 // iocp_drain consumes pending IOCP completion events from the buffer at
 // w.native.buf. Returns true if any events were found. Re-issues
-// ReadDirectoryChangesW for the next batch. The events are appended to `out`.
+// ReadDirectoryChangesW after each completed (or errored) call so the
+// watcher stays responsive. The events are appended to `out`.
 @(private)
 iocp_drain :: proc(
 	w: ^$T,
@@ -323,25 +324,34 @@ iocp_drain :: proc(
 		bytes: windows.DWORD = 0
 		key: windows.ULONG_PTR = 0
 		overlapped_out: ^windows.OVERLAPPED = nil
-		ok := windows.GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped_out, 50)
-		if !bool(ok) || bytes == 0 {
+		_ = windows.GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped_out, 50)
+
+		// If no completion was dequeued (timeout), keep waiting with the
+		// existing pending request.
+		if overlapped_out == nil {
 			break
 		}
-		entry := cast(^windows.FILE_NOTIFY_INFORMATION) rawptr(&buf[0])
-		for {
-			e, matched := process(entry, w, allocator)
-			if matched {
-				if drain {
-					append(out, e)
-					got_one = true
-				} else if !got_one {
-					first = e
-					got_one = true
+
+		if bytes > 0 {
+			entry := cast(^windows.FILE_NOTIFY_INFORMATION) rawptr(&buf[0])
+			for {
+				e, matched := process(entry, w, allocator)
+				if matched {
+					if drain {
+						append(out, e)
+						got_one = true
+					} else if !got_one {
+						first = e
+						got_one = true
+					}
 				}
+				if entry.next_entry_offset == 0 { break }
+				entry = cast(^windows.FILE_NOTIFY_INFORMATION)(uintptr(rawptr(entry)) + uintptr(entry.next_entry_offset))
 			}
-			if entry.next_entry_offset == 0 { break }
-			entry = cast(^windows.FILE_NOTIFY_INFORMATION)(uintptr(rawptr(entry)) + uintptr(entry.next_entry_offset))
 		}
+
+		// A completion (success or error) dequeued the pending request.
+		// Re-issue so we get more events.
 		windows.ResetEvent(event)
 		windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
 		if !drain do break
