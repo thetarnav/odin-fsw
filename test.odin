@@ -1,4 +1,5 @@
 #+test
+#+private package
 package fsw
 
 import "core:fmt"
@@ -41,10 +42,6 @@ write_file :: proc(path: string, content: string) {
 	if err != nil do return
 	os.write(fd, transmute([]byte)content)
 	os.close(fd)
-}
-
-touch_file :: proc(path: string) {
-	write_file(path, "hello")
 }
 
 // === Poll-and-collect helper ===
@@ -96,7 +93,7 @@ test_poll_file_watcher :: proc(t: ^testing.T) {
 	defer remove_all(dir)
 
 	filepath_a, _ := os.join_path({dir, "a.txt"}, context.temp_allocator)
-	touch_file(filepath_a)
+	write_file(filepath_a, "hello")
 
 	w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
 	testing.expectf(t, err == .None, "watch_file_poll error: %v", err)
@@ -132,7 +129,7 @@ test_poll_dir_watcher :: proc(t: ^testing.T) {
 
 	// 1. Create file
 	file_a, _ := os.join_path({dir, "new.txt"}, context.temp_allocator)
-	touch_file(file_a)
+	write_file(file_a, "hello")
 	events, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "new.txt")
 	})
@@ -171,7 +168,7 @@ test_poll_recursive_watcher :: proc(t: ^testing.T) {
 	os.mkdir(subdir)
 
 	nested_file, _ := os.join_path({subdir, "deep.txt"}, context.temp_allocator)
-	touch_file(nested_file)
+	write_file(nested_file, "hello")
 
 	events, found := collect_events(t, w, 3 * time.Second, 50 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "deep.txt")
@@ -209,7 +206,7 @@ test_native_file_watcher :: proc(t: ^testing.T) {
 	defer remove_all(dir)
 
 	filepath_a, _ := os.join_path({dir, "a.txt"}, context.temp_allocator)
-	touch_file(filepath_a)
+	write_file(filepath_a, "hello")
 
 	w, err := watch_file(filepath_a)
 	testing.expectf(t, err == .None, "watch_file error: %v", err)
@@ -243,7 +240,7 @@ test_native_dir_watcher :: proc(t: ^testing.T) {
 
 	// 1. Create file
 	file_a, _ := os.join_path({dir, "test.txt"}, context.temp_allocator)
-	touch_file(file_a)
+	write_file(file_a, "hello")
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "test.txt")
 	})
@@ -277,7 +274,7 @@ test_native_recursive_watcher :: proc(t: ^testing.T) {
 
 	// 2. Create file in subdir (auto-watched by recursive)
 	nested, _ := os.join_path({subdir, "nested.txt"}, context.temp_allocator)
-	touch_file(nested)
+	write_file(nested, "hello")
 	_, found = collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "nested.txt")
 	})
@@ -363,7 +360,7 @@ test_stress_many_files :: proc(t: ^testing.T) {
 	for i in 0..<50 {
 		name := fmt.tprintf("stress_{}.txt", i)
 		path, _ := os.join_path({dir, name}, context.temp_allocator)
-		touch_file(path)
+		write_file(path, "hello")
 	}
 
 	// Stop collecting as soon as we've seen 50 matching events. The
@@ -386,7 +383,7 @@ test_stress_many_files :: proc(t: ^testing.T) {
 
 	// Verify watcher is still alive — create one more file with a unique name
 	probe, _ := os.join_path({dir, "PROBE_AFTER_STRESS.txt"}, context.temp_allocator)
-	touch_file(probe)
+	write_file(probe, "hello")
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "PROBE_AFTER_STRESS")
 	})
@@ -399,7 +396,7 @@ test_stress_rapid_lifecycle :: proc(t: ^testing.T) {
 	defer remove_all(dir)
 
 	filepath_a, _ := os.join_path({dir, "lifecycle.txt"}, context.temp_allocator)
-	touch_file(filepath_a)
+	write_file(filepath_a, "hello")
 
 	// Create and destroy 20 watchers rapidly
 	for i in 0..<20 {
@@ -436,7 +433,7 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 	for i in 0..<200 {
 		name := fmt.tprintf("ovf_{}.txt", i)
 		path, _ := os.join_path({dir, name}, context.temp_allocator)
-		touch_file(path)
+		write_file(path, "hello")
 	}
 
 	// Look for an Overflow event, stopping as soon as one is seen. If
@@ -462,7 +459,7 @@ test_overflow_tracking :: proc(t: ^testing.T) {
 
 	// Verify watcher still works after the burst
 	probe, _ := os.join_path({dir, "PROBE_OVERFLOW.txt"}, context.temp_allocator)
-	touch_file(probe)
+	write_file(probe, "hello")
 	_, found := collect_events(t, w, 2 * time.Second, 10 * time.Millisecond, proc(e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "PROBE_OVERFLOW")
 	})

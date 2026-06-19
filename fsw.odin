@@ -28,6 +28,7 @@ Watcher_File :: struct {
 	allocator: mem.Allocator,
 	native:    Native_File,
 	events:    [dynamic]Event,
+	_track_resources: (Track_Resources when ODIN_TEST else struct {}),
 }
 
 // Watcher_Dir watches a directory (non-recursive) using the OS-native backend.
@@ -37,6 +38,7 @@ Watcher_Dir :: struct {
 	allocator: mem.Allocator,
 	native:    Native_Dir,
 	events:    [dynamic]Event,
+	_track_resources: (Track_Resources when ODIN_TEST else struct {}),
 }
 
 // Watcher_Recursive watches a directory and all its subdirectories.
@@ -47,6 +49,7 @@ Watcher_Recursive :: struct {
 	allocator: mem.Allocator,
 	native:    Native_Recursive,
 	events:    [dynamic]Event,
+	_track_resources: (Track_Resources when ODIN_TEST else struct {}),
 }
 
 // Watcher_File_Poll watches a single file by stat-based polling.

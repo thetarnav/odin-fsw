@@ -71,7 +71,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE {
 		posix.close(kq)
-		track_close(int(kq))
+		track_close(kq)
 		os.close(file)
 		return .Backend_Init_Failed
 	}
@@ -84,7 +84,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> Error {
 
 backend_file_destroy :: proc(w: ^Watcher_File) {
 	posix.close(w.native.kq)
-	track_close(int(w.native.kq))
+	track_close(w.native.kq)
 	os.close(w.native.file)
 	track_close(w.native.fd)
 }

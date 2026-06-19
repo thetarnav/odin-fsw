@@ -1,82 +1,56 @@
-// track.odin — Test-only handle/resource tracking for the built-in
-// memory tracker.
-//
-// In tests (when ODIN_TEST is defined), every OS resource acquisition
-// (posix.open, kqueue.kqueue, CreateFileW, CreateEventW, ...) is paired
-// with a small heap allocation. The address of that allocation is stored
-// in a global map keyed by the handle value. When the matching close runs,
-// the allocation is freed and the map entry is removed. If a test exits
-// with handles still open, the built-in memory tracker reports a leak and
-// points at this file (the new(int, ...) call site). Double-close is also
-// caught: the second unregister is a no-op (map miss), but the real
-// close (posix.close, etc.) returns EBADF — that won't be caught by us
-// directly, but the test framework will flag the resulting bad free on
-// the token (or just the missing-handle EBADF) as a red flag.
-//
-// All tracking allocations (the map's buckets and the per-handle tokens)
-// use `runtime.heap_allocator` so the built-in test memory tracker does
-// not flag them. The map is allocated in `@init` and freed in `@fini`,
-// running outside any individual test's accounting window.
-//
-// In release builds the helpers are no-ops and the map is absent.
+// track.odin — Test-only handle/resource tracking.
+// Uses the built-in memory tracking feature of odin's testing framework
+// to track unclosed os resources. os.open() -> os.close()
 
-#+feature global-context
+#+private package
 package fsw
 
-import "base:runtime"
+@require import "base:runtime"
+@require import "core:log"
 
 when ODIN_TEST {
-	// Tracks an outstanding resource by handle value. The key is the
-	// resource (cast to int — FDs and HANDLEs are both pointer-sized
-	// integers on the platforms we target). The value is a single-int
-	// allocation; on close, this allocation is freed and the key is
-	// removed from the map.
-	@(private)
-	OS_Resources: ^map[int]^int
+	Track_Resources :: map[int]runtime.Source_Code_Location
 
-	@(private)
-	@(init)
-	track_init :: proc() {
-		ha := runtime.heap_allocator()
-		OS_Resources = new(map[int]^int, ha)
-		OS_Resources^ = make(map[int]^int, ha)
+	_track_start :: proc (resources: ^Track_Resources, loc: runtime.Source_Code_Location) {
+		resources^ = make(Track_Resources, loc=loc)
 	}
-
-	@(private)
-	@(fini)
-	track_fini :: proc() {
-		ha := runtime.heap_allocator()
-		for _, token in OS_Resources^ {
-			free(token, ha)
+	_track_end :: proc (resources: ^Track_Resources, loc: runtime.Source_Code_Location) {
+		for _, token_loc in resources {
+			log.errorf("Resource not closed", location=token_loc)
 		}
-		delete(OS_Resources^)
-		free(OS_Resources, ha)
+		delete(resources^, loc=loc)
 	}
-
-	// track_open records that `key` was just acquired. The key must be
-	// non-negative (e.g. FD -1 on error should not be tracked).
-	track_open :: proc(key: int) {
+	_track_open :: proc (resources: ^Track_Resources, #any_int key: int, loc: runtime.Source_Code_Location) {
 		if key < 0 do return
-		token := new(int, runtime.heap_allocator())
-		token^ = key
-		OS_Resources^[key] = token
+		resources[key] = loc
 	}
-
-	// track_close removes `key` from the tracking map and frees its
-	// token. Safe to call for unknown keys (e.g. closing a handle that
-	// was never tracked, or after a double-close already removed it).
-	track_close :: proc(key: int) {
-		if token, ok := OS_Resources^[key]; ok {
-			delete_key(OS_Resources, key)
-			free(token, runtime.heap_allocator())
+	_track_close :: proc (resources: ^Track_Resources, #any_int key: int, loc: runtime.Source_Code_Location) {
+		if key < 0 do return
+		if _, in_map := resources[key]; in_map {
+			delete_key(resources, key)
+		} else {
+			log.errorf("Unopened resource closed", location=loc)
 		}
 	}
-} else {
-	// No-op stubs for release builds. The runtime import is referenced
-	// here so the import isn't flagged as unused by vet in non-test
-	// builds; the reference is a compile-time constant and optimized away.
-	_RUNTIME_REFERENCE :: runtime.heap_allocator
+}
 
-	track_open :: proc(key: int) {}
-	track_close :: proc(key: int) {}
+track_start :: proc (w: ^$W, loc := #caller_location) {
+	when ODIN_TEST {
+		_track_start(&w._track_resources, loc=loc)
+	}
+}
+track_end :: proc (w: ^$W, loc := #caller_location) {
+	when ODIN_TEST {
+		_track_end(&w._track_resources, loc=loc)
+	}
+}
+track_open :: proc (w: ^$W, key: $T, loc := #caller_location) {
+	when ODIN_TEST {
+		_track_open(&w._track_resources, auto_cast key, loc)
+	}
+}
+track_close :: proc (w: ^$W, key: $T, loc := #caller_location) {
+	when ODIN_TEST {
+		_track_close(&w._track_resources, auto_cast key, loc)
+	}
 }

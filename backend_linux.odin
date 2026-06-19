@@ -35,8 +35,8 @@ Native_Dir :: struct {
 }
 
 Native_Recursive :: struct {
-	fd:      linux.Fd,        // inotify fd
-	watches: map[int]string,  // wd -> dir_path
+	fd:      linux.Fd,            // inotify fd
+	watches: map[linux.Wd]string, // wd -> dir_path
 }
 
 INOTIFY_MASK :: linux.Inotify_Event_Mask{
@@ -63,7 +63,7 @@ inotify_normalize :: proc(mask: linux.Inotify_Event_Mask) -> Event_Kind {
 }
 
 inotify_event_name :: proc(event: ^linux.Inotify_Event, allocator := context.temp_allocator) -> string {
-	if event.len == 0 { return "" }
+	if event.len == 0 do return ""
 	name_ptr := rawptr(uintptr(&event^) + size_of(linux.Inotify_Event))
 	return strings.clone_from_cstring(cstring(name_ptr), allocator)
 }
@@ -73,27 +73,32 @@ INOTIFY_BUF_SIZE :: 8192
 
 // === Watcher_File ===
 
-backend_file_init :: proc(w: ^Watcher_File) -> Error {
+backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
+
+	track_start(w)
+
 	fd, errno := linux.inotify_init1({.NONBLOCK, .CLOEXEC})
-	if errno != .NONE {
-		return .Backend_Init_Failed
+	if errno != .NONE do return .Backend_Init_Failed
+	track_open(w, fd)
+	defer if err != nil {
+		linux.close(fd)
+		track_close(w, fd)
 	}
-	track_open(int(fd))
+
 	cs := to_cstring(w.path)
 	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
-	if errno2 != .NONE {
-		linux.close(fd)
-		track_close(int(fd))
-		return .Backend_Init_Failed
-	}
+	if errno2 != .NONE do return .Backend_Init_Failed
+
 	w.native.fd = fd
 	w.native.wd = wd
+
 	return .None
 }
 
 backend_file_destroy :: proc(w: ^Watcher_File) {
 	linux.close(w.native.fd)
-	track_close(int(w.native.fd))
+	track_close(w, w.native.fd)
+	track_end(w)
 }
 
 backend_file_get_event :: proc(w: ^Watcher_File) -> (Event, bool) {
@@ -115,27 +120,32 @@ backend_file_get_events :: proc(w: ^Watcher_File) -> []Event {
 
 // === Watcher_Dir ===
 
-backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
+backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
+
+	track_start(w)
+
 	fd, errno := linux.inotify_init1({.NONBLOCK, .CLOEXEC})
-	if errno != .NONE {
-		return .Backend_Init_Failed
+	if errno != .NONE do return .Backend_Init_Failed
+	track_open(w, fd)
+	defer if err != nil {
+		linux.close(fd)
+		track_close(w, fd)
 	}
-	track_open(int(fd))
+
 	cs := to_cstring(w.path)
 	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
-	if errno2 != .NONE {
-		linux.close(fd)
-		track_close(int(fd))
-		return .Backend_Init_Failed
-	}
+	if errno2 != .NONE do return .Backend_Init_Failed
+
 	w.native.fd = fd
 	w.native.wd = wd
+
 	return .None
 }
 
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	linux.close(w.native.fd)
-	track_close(int(w.native.fd))
+	track_close(w, w.native.fd)
+	track_end(w)
 }
 
 backend_dir_get_event :: proc(w: ^Watcher_Dir) -> (Event, bool) {
@@ -158,14 +168,18 @@ backend_dir_get_events :: proc(w: ^Watcher_Dir) -> []Event {
 // === Watcher_Recursive ===
 
 backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
+
+	track_start(w)
+
 	fd, errno := linux.inotify_init1({.NONBLOCK, .CLOEXEC})
-	if errno != .NONE {
-		return .Backend_Init_Failed
-	}
-	track_open(int(fd))
+	if errno != .NONE do return .Backend_Init_Failed
+	track_open(w, fd)
+
 	w.native.fd = fd
-	w.native.watches = make(map[int]string, w.allocator)
+	w.native.watches = make(map[linux.Wd]string, w.allocator)
+
 	rec_add_watch(w, w.path)
+
 	return .None
 }
 
@@ -174,7 +188,8 @@ backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
 	}
 	linux.close(w.native.fd)
-	track_close(int(w.native.fd))
+	track_close(w, w.native.fd)
+	track_end(w)
 }
 
 backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
@@ -197,14 +212,16 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 }
 
 rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
+
 	cs := to_cstring(dir)
 	wd, errno := linux.inotify_add_watch(w.native.fd, cs, INOTIFY_MASK)
 	if errno != .NONE do return
 
-	w.native.watches[int(wd)] = strings.clone(dir, w.allocator)
+	w.native.watches[wd] = strings.clone(dir, w.allocator)
 
 	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
 	if read_err != nil do return
+
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." do continue
 		if entry.type == .Directory {
@@ -295,7 +312,7 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, drain: bool) -> (e: Event, got_
 
 			e.kind = inotify_normalize(event.mask)
 
-			dir_path := w.native.watches[int(event.wd)] or_continue
+			dir_path := w.native.watches[event.wd] or_continue
 			if name := inotify_event_name(event); name != "" {
 				e.path, _ = filepath.join({dir_path, name}, w.allocator)
 			} else {
