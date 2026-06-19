@@ -284,11 +284,8 @@ inotify_read :: proc(
 			}
 
 			got_one = true
-			if drain {
-				append(out, e)
-			} else {
-				return
-			}
+			append(out, e)
+			if !drain do return
 		}
 		if !drain do break
 	}
@@ -326,11 +323,8 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, drain: bool) -> (e: Event, got_
 			}
 
 			got_one = true
-			if drain {
-				append(&w.events, e)
-			} else {
-				return
-			}
+			append(&w.events, e)
+			if !drain do return
 		}
 		if !drain do break
 	}
