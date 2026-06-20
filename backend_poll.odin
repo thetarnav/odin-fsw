@@ -58,7 +58,7 @@ poll_file_get_events :: proc(w: ^Watcher_File_Poll, allocator: mem.Allocator, ou
 poll_dir_get_events :: proc(w: ^Watcher_Dir_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	old := w.prev
 	current := make(map[string]File_Info, w.allocator)
-	snapshot_dir_alloc(w.path, &current, w.allocator)
+	snapshot_dir_alloc(w.path, &current, w.allocator, fullpath=true, recursive=false)
 
 	for path in old {
 		if _, ok := current[path]; !ok {
@@ -85,7 +85,7 @@ poll_dir_get_events :: proc(w: ^Watcher_Dir_Poll, allocator: mem.Allocator, out:
 poll_rec_get_events :: proc(w: ^Watcher_Recursive_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	old := w.prev
 	current := make(map[string]File_Info, w.allocator)
-	snapshot_recursive_alloc(w.path, &current, w.allocator)
+	snapshot_dir_alloc(w.path, &current, w.allocator, fullpath=true, recursive=true)
 
 	for path in old {
 		if _, in_current := current[path]; !in_current {

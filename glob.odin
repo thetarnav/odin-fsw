@@ -46,24 +46,21 @@ glob_match_path :: proc(pattern: string, path: string) -> bool {
 }
 
 glob_scan_dir :: proc(w: ^Watcher_Glob, dir: string) {
-	entries, err := os.read_all_directory_by_path(dir, context.temp_allocator)
-	if err != nil do return
+
+	entries, _ := os.read_all_directory_by_path(dir, context.temp_allocator)
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." do continue
-		fullpath, join_err := filepath.join({dir, entry.name}, w.allocator)
-		if join_err != nil do continue
-		rel, rel_err := filepath.rel(w.inner.path, fullpath, context.temp_allocator)
-		if rel_err != nil {
-			delete(fullpath, w.allocator)
-			continue
-		}
+
+		fullpath := filepath.join({dir, entry.name}, context.temp_allocator) or_continue
+		rel := filepath.rel(w.inner.path, fullpath, context.temp_allocator) or_continue
+
 		if entry.type == .Directory {
 			glob_scan_dir(w, fullpath)
 		}
+
 		if glob_match_path(w.pattern, rel) {
+			fullpath = strings.clone(fullpath, w.allocator)
 			w.matched_files[fullpath] = true
-		} else {
-			delete(fullpath, w.allocator)
 		}
 	}
 }
@@ -73,7 +70,7 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 	w.matched_files = make(map[string]bool, w.allocator)
 	glob_scan_dir(w, w.inner.path)
 	for path in old {
-		if _, ok := w.matched_files[path]; !ok {
+		if path not_in w.matched_files {
 			// .Removed events are emitted by get_events on the next call;
 			// matched_files cleanup happens then.
 			delete(path, w.allocator)
@@ -118,8 +115,7 @@ glob_filter_event :: proc(w: ^Watcher_Glob, event: Event) -> (key_path: string, 
 		w.matched_files[path_clone] = true
 		return path_clone, true
 
-	case .Removed:
-	case .Renamed:
+	case .Removed, .Renamed:
 		for key in w.matched_files {
 			if key == event.path {
 				delete_key(&w.matched_files, key)
@@ -128,7 +124,7 @@ glob_filter_event :: proc(w: ^Watcher_Glob, event: Event) -> (key_path: string, 
 			}
 		}
 	case .Modified:
-		if _, ok := w.matched_files[event.path]; ok {
+		if event.path in w. matched_files {
 			return event.path, true
 		}
 	}

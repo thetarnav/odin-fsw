@@ -1,9 +1,11 @@
 // fsw.odin — Cross-platform file & directory watching for Odin.
 //
 // Pull-based API. The library does not start threads; the user drives the
-// event loop. Each call to `get_events` returns all events accumulated
-// since the last call, as a fresh `[dynamic]Event` allocated with the
-// watcher's allocator. The caller is responsible for freeing it.
+// event loop. Each call to `get_events` returns all events from a single
+// OS read / poll cycle, as a `[]Event` slice. The backing array and
+// path strings are allocated with the allocator passed to `get_events`
+// (defaults to `context.allocator`). Use `context.temp_allocator` for
+// fire-and-forget use.
 //
 // Constructors: `watch_file`, `watch_dir`, `watch_dir_recursive`,
 // `watch_file_poll`, `watch_dir_poll`, `watch_dir_poll_recursive`,
@@ -14,9 +16,8 @@
 //   defer destroy(w)
 //   for {
 //       time.sleep(100 * time.Millisecond)
-//       events := get_events(w)
-//       for ev in events { fmt.println(ev) }
-//       delete(events)
+//       events := get_events(w, context.temp_allocator)
+//       for ev in events {fmt.println(ev)}
 //   }
 
 package fsw
@@ -26,6 +27,33 @@ import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:time"
+
+// === Event types ===
+
+// Event_Kind describes the type of filesystem change detected.
+Event_Kind :: enum {
+	Added,        // A new file or directory was created.
+	Removed,      // A file or directory was deleted.
+	Modified,     // A file's content or metadata changed.
+	Renamed,      // A file or directory was moved/renamed.
+	Overflow,     // The OS event queue overflowed; events may have been lost.
+	Invalidated,  // The watch target was unmounted or became invalid.
+}
+
+// Error codes returned by watcher constructors and rescan procs.
+Error :: enum {
+	None,                // No error.
+	Invalid_Path,        // The path does not exist or cannot be resolved.
+	Backend_Init_Failed, // The OS-native watcher could not be created.
+}
+
+// Event represents a single filesystem change. The path string is allocated
+// with the allocator passed to get_events. Free it with that allocator.
+Event :: struct {
+	kind:   Event_Kind, // What happened.
+	path:   string,     // Absolute path of the affected file/directory.
+	is_dir: bool,       // True if the target is a directory.
+}
 
 // === Watcher types ===
 
@@ -98,7 +126,6 @@ Watcher_Glob :: struct {
 
 // watch_file creates a native watcher for a single file.
 // Initializes OS handles. Does NOT start a thread.
-// Call get_events to receive events.
 // Call destroy(w) when done.
 watch_file :: proc(path: string, allocator := context.allocator) -> (^Watcher_File, Error) {
 
@@ -151,8 +178,8 @@ watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir
 
 // watch_dir_recursive creates a native watcher for a directory tree.
 // Initializes OS handles and registers all subdirectories. Does NOT start a thread.
-// Subdirectories created after init are auto-watched when the OS reports an
-// .Added event for them on the next get_events call.
+// Subdirectories created after init are auto-watched when the kernel reports an
+// .Added event for them (on the first get_events call that processes the event).
 watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
 
 	p, err := filepath.abs(path, allocator)
@@ -217,7 +244,7 @@ watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := contex
 	if err != nil do return nil, .Invalid_Path
 
 	prev := make(map[string]File_Info, allocator)
-	snapshot_dir_alloc(p, &prev, allocator)
+	snapshot_dir_alloc(p, &prev, allocator, fullpath=true, recursive=false)
 
 	w, new_err := new(Watcher_Dir_Poll, allocator)
 	if new_err != nil do return nil, .Backend_Init_Failed
@@ -241,11 +268,9 @@ watch_dir_poll_recursive :: proc(path: string, latency: time.Duration, allocator
 		return nil, .Invalid_Path
 	}
 	prev := make(map[string]File_Info, allocator)
-	snapshot_recursive_alloc(p, &prev, allocator)
-	w := new(Watcher_Recursive_Poll, allocator)
-	if w == nil {
-		return nil, .Backend_Init_Failed
-	}
+	snapshot_dir_alloc(p, &prev, allocator, fullpath=true, recursive=true)
+	w, new_err := new(Watcher_Recursive_Poll, allocator)
+	if new_err != nil do return nil, .Backend_Init_Failed
 	w^ = Watcher_Recursive_Poll{
 		path      = p,
 		allocator = allocator,
@@ -265,8 +290,8 @@ watch_glob :: proc(pattern: string, allocator := context.allocator) -> (^Watcher
 	p, err := filepath.abs(root, allocator)
 	if err != nil do return nil, .Invalid_Path
 
-	w := new(Watcher_Glob, allocator)
-	if w == nil do return nil, .Backend_Init_Failed
+	w, new_err := new(Watcher_Glob, allocator)
+	if new_err != nil do return nil, .Backend_Init_Failed
 
 	w^ = Watcher_Glob{
 		pattern   = pat,
@@ -388,6 +413,7 @@ get_events_file :: proc(w: ^Watcher_File, allocator := context.allocator) -> []E
 }
 
 // get_events_dir returns all available events from a Watcher_Dir.
+// For native backends, performs a non-blocking read of the OS notification queue.
 get_events_dir :: proc(w: ^Watcher_Dir, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	backend_dir_get_events(w, allocator, &events)
@@ -396,6 +422,7 @@ get_events_dir :: proc(w: ^Watcher_Dir, allocator := context.allocator) -> []Eve
 }
 
 // get_events_rec returns all available events from a Watcher_Recursive.
+// For native backends, performs a non-blocking read of the OS notification queue.
 get_events_rec :: proc(w: ^Watcher_Recursive, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	backend_rec_get_events(w, allocator, &events)
@@ -431,7 +458,7 @@ get_events_rec_poll :: proc(w: ^Watcher_Recursive_Poll, allocator := context.all
 
 // get_events is a procedure group that accepts any watcher type.
 // Returns all available events from a single OS read / poll cycle.
-// The returned [dynamic]Event must be `delete`d by the caller.
+// The returned `[]Event` and its `path` strings must be freed by the caller — use `delete_events(events)`.
 get_events :: proc {
 	get_events_file,
 	get_events_dir,
@@ -468,7 +495,7 @@ rescan_rec :: proc(w: ^Watcher_Recursive) -> Error {
 rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error {
 	delete(w.prev)
 	w.prev = make(map[string]File_Info, w.allocator)
-	snapshot_recursive_alloc(w.path, &w.prev, w.allocator)
+	snapshot_dir_alloc(w.path, &w.prev, w.allocator, fullpath=true, recursive=true)
 	return .None
 }
 

@@ -20,9 +20,9 @@ for {
     events := fsw.get_events(w)
     for event in events {
         fmt.printfln("%v: %s", event.kind, event.path)
-        delete(event.path) // free the path
     }
-    delete(events) // free backing array
+    // or use `fsw.delete_events(events)` to free both paths and backing array in one call.
+    delete_events(events)
 
     // The library does not start any threads.
     // sleep if you want to avoid a tight loop.
@@ -119,7 +119,3 @@ The glob watcher pulls events from an internal recursive watcher. Non-matching e
 ### Rescan after external changes
 
 For Linux and kqueue-based recursive watchers: if subdirectories are deleted out from under the watcher, `rescan` rebuilds the watch set. For Windows, `ReadDirectoryChangesW` with `bWatchSubtree=TRUE` tracks subdirectory changes automatically, so rescan is a no-op.
-
-### Path lifetime for glob events
-
-Events from `watch_glob` have paths that point into the watcher's internal `matched_files` map. They are stable as long as the file remains matched. If you need to keep the path past a subsequent `get_events` call, clone it.

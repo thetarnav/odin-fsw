@@ -132,7 +132,7 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
 	w.native.file = file
 	w.native.prev = make(map[string]File_Info, w.allocator)
 
-	snapshot_dir_by_name_alloc(w.path, &w.native.prev, w.allocator)
+	snapshot_dir_alloc(w.path, &w.native.prev, w.allocator, fullpath=false, recursive=false)
 
 	return .None
 }
@@ -235,7 +235,7 @@ kqueue_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	w.native.watches[int(fd)] = strings.clone(dir, w.allocator)
 
 	dir_prev := make(map[string]File_Info, w.allocator)
-	snapshot_dir_by_name_alloc(dir, &dir_prev, w.allocator)
+	snapshot_dir_alloc(dir, &dir_prev, w.allocator, fullpath=false, recursive=false)
 	w.native.prev[dir] = dir_prev
 
 	entries, read_err := os.read_all_directory_by_path(dir, w.allocator)
@@ -285,7 +285,7 @@ kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynam
 
 	old := w.native.prev
 	current := make(map[string]File_Info, w.allocator)
-	snapshot_dir_by_name_alloc(w.path, &current, w.allocator)
+	snapshot_dir_alloc(w.path, &current, w.allocator, fullpath=false, recursive=false)
 
 	for name in old {
 		if _, ok := current[name]; !ok {
@@ -312,11 +312,11 @@ kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynam
 @(private)
 kqueue_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [64]kqueue.KEvent
-	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
+	kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
 
 	for dir_path, dir_prev in w.native.prev {
 		current := make(map[string]File_Info, w.allocator)
-		snapshot_dir_by_name_alloc(dir_path, &current, w.allocator)
+		snapshot_dir_alloc(dir_path, &current, w.allocator, fullpath=false, recursive=false)
 
 		for name in dir_prev {
 			if _, ok := current[name]; !ok {

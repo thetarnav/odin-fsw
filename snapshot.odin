@@ -40,76 +40,32 @@ file_stat_alloc :: proc(path: string, allocator: mem.Allocator) -> (os.File_Info
 // snapshot_dir_alloc populates a map with File_Info entries for all files in a
 // directory. All allocations use the provided allocator. Callers are
 // responsible for freeing the map keys.
-snapshot_dir_alloc :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
-	entries, err := os.read_all_directory_by_path(dir, allocator)
-	if err != nil do return
-	defer {
-		for entry in entries {
-			os.file_info_delete(entry, allocator)
-		}
-		delete(entries)
-	}
-	for entry in entries {
-		if entry.name == "." || entry.name == ".." do continue
-		fullpath := filepath.join({dir, entry.name}, allocator) or_continue
-		prev[fullpath] = File_Info{
-			is_dir = entry.type == .Directory,
-			size   = entry.size,
-			mtime  = entry.modification_time,
-			inode  = entry.inode,
-		}
-	}
-}
+//
+// recursive=true visits all nested directories.
+//
+// fullpath=false populates a map keyed by entry name (not full path)
+snapshot_dir_alloc :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator, fullpath: bool, recursive: bool) {
 
-// snapshot_recursive_alloc populates a map with File_Info entries for all files
-// in a directory tree. All allocations use the provided allocator.
-snapshot_recursive_alloc :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
-	entries, err := os.read_all_directory_by_path(dir, allocator)
-	if err != nil do return
-	defer {
-		for entry in entries {
-			os.file_info_delete(entry, allocator)
-		}
-		delete(entries)
-	}
+	entries, _ := os.read_all_directory_by_path(dir, context.temp_allocator)
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." do continue
-		fullpath := filepath.join({dir, entry.name}, allocator) or_continue
-		prev[fullpath] = File_Info{
-			is_dir = entry.type == .Directory,
-			size   = entry.size,
-			mtime  = entry.modification_time,
-			inode  = entry.inode,
-		}
-		if entry.type == .Directory {
-			snapshot_recursive_alloc(fullpath, prev, allocator)
-		}
-	}
-}
 
-// snapshot_dir_by_name_alloc populates a map keyed by entry name (not full path).
-// Used by kqueue backends that detect changes via dir-level VNode events and
-// need to diff by filename. Callers are responsible for freeing the map keys.
-snapshot_dir_by_name_alloc :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator) {
-	entries, err := os.read_all_directory_by_path(dir, allocator)
-	if err != nil do return
-	defer {
-		for entry in entries {
-			os.file_info_delete(entry, allocator)
+		path: string
+		if fullpath {
+			path = filepath.join({dir, entry.name}, allocator) or_continue
+		} else {
+			path = strings.clone(entry.name, allocator) or_continue
 		}
-		delete(entries)
-	}
-	for entry in entries {
-		if entry.name == "." || entry.name == ".." do continue
-		// Clone the name since it is a slice into entry.fullpath, which
-		// will be freed when the defer above runs. The map keys must
-		// outlive the entries.
-		name := strings.clone(entry.name, allocator)
-		prev[name] = File_Info{
+
+		prev[path] = File_Info{
 			is_dir = entry.type == .Directory,
 			size   = entry.size,
 			mtime  = entry.modification_time,
 			inode  = entry.inode,
+		}
+
+		if recursive && entry.type == .Directory {
+			snapshot_dir_alloc(path, prev, allocator, fullpath=fullpath, recursive=true)
 		}
 	}
 }
