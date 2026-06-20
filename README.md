@@ -75,6 +75,17 @@ None of the constructors take a callback or start a thread.
 
 All constructors accept an optional `allocator` parameter (defaults to `context.allocator`).
 
+If you need to store a watcher opaquely without committing to a specific kind,
+use the `Watcher` tagged union — `destroy`, `get_events`, and `rescan` all
+dispatch on it:
+
+```odin
+w: fsw.Watcher
+w = fsw.watch_dir("/tmp") or_return
+defer fsw.destroy(w)
+events := fsw.get_events(w)
+```
+
 ### Native watchers
 
 Use the OS-native notification mechanism. Preferred when available.

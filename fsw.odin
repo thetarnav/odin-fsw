@@ -122,6 +122,19 @@ Watcher_Glob :: struct {
 	inner:         Watcher_Recursive,
 }
 
+// Watcher is an opaque tagged union over all watcher types. Use it to store
+// a watcher without committing to a specific kind — the `destroy`, `get_events`,
+// and `rescan` proc groups all dispatch on the union as well.
+Watcher :: union {
+	^Watcher_File,
+	^Watcher_Dir,
+	^Watcher_Recursive,
+	^Watcher_File_Poll,
+	^Watcher_Dir_Poll,
+	^Watcher_Recursive_Poll,
+	^Watcher_Glob,
+}
+
 // === Constructors — all heap-allocate, return pointers ===
 
 // watch_file creates a native watcher for a single file.
@@ -394,7 +407,7 @@ destroy_glob :: proc(w: ^Watcher_Glob) {
 }
 
 // destroy is a procedure group that accepts any watcher type.
-// Call destroy(w) with any ^Watcher_* to free it.
+// Call destroy(w) with any ^Watcher_* or a Watcher union to free it.
 destroy :: proc {
 	destroy_file,
 	destroy_dir,
@@ -403,6 +416,20 @@ destroy :: proc {
 	destroy_dir_poll,
 	destroy_rec_poll,
 	destroy_glob,
+	destroy_watcher,
+}
+
+// destroy_watcher frees a Watcher union, dispatching to the correct destroy_*.
+destroy_watcher :: proc(w: Watcher) {
+	switch v in w {
+	case ^Watcher_File:           destroy(v)
+	case ^Watcher_Dir:            destroy(v)
+	case ^Watcher_Recursive:      destroy(v)
+	case ^Watcher_File_Poll:      destroy(v)
+	case ^Watcher_Dir_Poll:       destroy(v)
+	case ^Watcher_Recursive_Poll: destroy(v)
+	case ^Watcher_Glob:           destroy(v)
+	}
 }
 
 // === get_events ===
@@ -480,6 +507,22 @@ get_events :: proc {
 	get_events_dir_poll,
 	get_events_rec_poll,
 	get_events_glob,
+	get_events_watcher,
+}
+
+// get_events_watcher returns events from a Watcher union, dispatching to the correct get_events_*.
+@require_results
+get_events_watcher :: proc(w: Watcher, allocator := context.allocator) -> []Event {
+	switch v in w {
+	case ^Watcher_File:           return get_events(v, allocator)
+	case ^Watcher_Dir:            return get_events(v, allocator)
+	case ^Watcher_Recursive:      return get_events(v, allocator)
+	case ^Watcher_File_Poll:      return get_events(v, allocator)
+	case ^Watcher_Dir_Poll:       return get_events(v, allocator)
+	case ^Watcher_Recursive_Poll: return get_events(v, allocator)
+	case ^Watcher_Glob:           return get_events(v, allocator)
+	}
+	return {}
 }
 
 clone_event :: proc (e: Event, allocator := context.allocator, loc := #caller_location) -> Event {
@@ -511,9 +554,8 @@ rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error {
 }
 
 // rescan_glob forces a full rescan of a glob watcher, re-registering watches and re-matching files.
-rescan_glob :: proc(w: ^Watcher_Glob) -> Error {
-	e := rescan_rec(&w.inner)
-	if e != .None { return e }
+rescan_glob :: proc(w: ^Watcher_Glob) -> (err: Error) {
+	rescan_rec(&w.inner) or_return
 	glob_rescan(w)
 	return .None
 }
@@ -525,4 +567,16 @@ rescan :: proc {
 	rescan_rec,
 	rescan_rec_poll,
 	rescan_glob,
+	rescan_watcher,
+}
+
+// rescan_watcher forces a rescan of a Watcher union, dispatching to the correct rescan_*.
+@require_results
+rescan_watcher :: proc(w: Watcher) -> Error {
+	#partial switch v in w {
+	case ^Watcher_Recursive:      return rescan(v)
+	case ^Watcher_Recursive_Poll: return rescan(v)
+	case ^Watcher_Glob:           return rescan(v)
+	}
+	return .None
 }
