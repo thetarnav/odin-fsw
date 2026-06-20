@@ -1,7 +1,8 @@
 # fsw — Filesystem Watcher for Odin
 
-Cross-platform file and directory watching library.
-Uses native backends where available (inotify on Linux, kqueue on Darwin/FreeBSD/NetBSD/OpenBSD, ReadDirectoryChangesW on Windows) with a polling fallback for all platforms.
+Cross-platform file and directory watching library.\
+Uses native backends where available (inotify on Linux, kqueue on Darwin/FreeBSD/NetBSD/OpenBSD, ReadDirectoryChangesW on Windows),\
+with a polling fallback for all platforms.
 
 ## Pull-Based API
 
@@ -33,10 +34,10 @@ for {
 }
 ```
 
-`get_events` performs one OS read / poll cycle and\
-returns all events that were available.
-The returned `[]Event` and each `event.path` string are allocated with\
-the allocator passed to `get_events` (defaults to `context.allocator`).
+`get_events` performs one OS read / poll cycle and
+returns all events that were available.\
+The returned `[]Event` and each `event.path` string are allocated with
+the allocator passed to `get_events` (defaults to `context.allocator`).\
 Pass `context.temp_allocator` for fire-and-forget use.
 
 ```odin
@@ -58,7 +59,9 @@ Or free manually:
 
 ## Constructors
 
-All constructors return a heap-allocated pointer. Call `destroy` when done. None of the constructors take a callback or start a thread.
+All constructors return a heap-allocated pointer.\
+Call `destroy` when done.\
+None of the constructors take a callback or start a thread.
 
 | Constructor | Type | Backend |
 |---|---|---|
@@ -88,7 +91,7 @@ or when latency-based polling is desired.
 
 - `watch_file_poll` — stat-based polling.
   User drives polling by calling `get_events`;
-  each call performs one `stat()`.
+  each call performs one `stat()`.\
   User should `time.sleep(latency)` between calls.
 - `watch_dir_poll` — snapshot-based directory polling.
   Each call does one snapshot diff.
@@ -102,7 +105,9 @@ Watches a directory recursively, filtering events through a glob pattern.
 w, err := fsw.watch_glob("/tmp/*.txt")
 ```
 
-The glob pattern must start with a directory prefix (e.g. `/tmp/*.txt`). The watcher extracts the static prefix as the watch root, then filters events through the pattern. Only files matching the pattern trigger events.
+The glob pattern must start with a directory prefix (e.g. `/tmp/*.txt`).\
+The watcher extracts the static prefix as the watch root, then filters events through the pattern.\
+Only files matching the pattern trigger events.
 
 ## Events
 
@@ -129,25 +134,25 @@ For non-recursive watchers, `rescan` is a no-op.
 
 ### Glob pattern format
 
-`watch_glob` uses `filepath.match` for pattern matching.
-Patterns like `*.txt` match at the top level only;
-use `**/*.txt` for deeper matching if supported by your platform's `filepath.match`.
+`watch_glob` uses `filepath.match` for pattern matching.\
+Patterns like `*.txt` match at the top level only.\
+Use `**/*.txt` for deeper matching if supported by your platform's `filepath.match`.
 
 ### Recursive watcher memory
 
-`watch_dir_recursive` and `watch_glob` allocate a map to track watched subdirectories.
+`watch_dir_recursive` and `watch_glob` allocate a map to track watched subdirectories.\
 For very deep directory trees, this uses more memory than flat watchers.
 
 ### Glob watcher event filtering
 
-The glob watcher pulls events from an internal recursive watcher.
-Non-matching events are consumed but discarded,
+The glob watcher pulls events from an internal recursive watcher.\
+Non-matching events are consumed but discarded,\
 so a glob watcher is more efficient when most events would not match the pattern.
 
 ### Rescan after external changes
 
-For Linux and kqueue-based recursive watchers:
+For Linux and kqueue-based recursive watchers:\
 if subdirectories are deleted out from under the watcher,
-`rescan` rebuilds the watch set.
+`rescan` rebuilds the watch set.\
 For Windows, `ReadDirectoryChangesW` with `bWatchSubtree=TRUE` tracks subdirectory changes automatically,
 so rescan is a no-op.
