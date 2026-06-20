@@ -62,7 +62,7 @@ Watcher_File :: struct {
 	path:      string,
 	allocator: mem.Allocator,
 	native:    Native_File,
-	_track_resources: (Track_Resources when ODIN_TEST else struct {}),
+	_track_resources: Track_Resources, // for testing
 }
 
 // Watcher_Dir watches a directory (non-recursive) using the OS-native backend.
@@ -71,7 +71,7 @@ Watcher_Dir :: struct {
 	path:      string,
 	allocator: mem.Allocator,
 	native:    Native_Dir,
-	_track_resources: (Track_Resources when ODIN_TEST else struct {}),
+	_track_resources: Track_Resources, // for testing
 }
 
 // Watcher_Recursive watches a directory and all its subdirectories.
@@ -81,7 +81,7 @@ Watcher_Recursive :: struct {
 	path:      string,
 	allocator: mem.Allocator,
 	native:    Native_Recursive,
-	_track_resources: (Track_Resources when ODIN_TEST else struct {}),
+	_track_resources: Track_Resources, // for testing
 }
 
 // Watcher_File_Poll watches a single file by stat-based polling.
@@ -500,9 +500,7 @@ delete_events :: proc (events: []Event, allocator := context.allocator, loc := #
 // === rescan ===
 
 // rescan_rec forces a full rescan of a recursive watcher, re-registering all inotify/kqueue watches.
-rescan_rec :: proc(w: ^Watcher_Recursive) -> Error {
-	return backend_rec_rescan(w)
-}
+rescan_rec :: backend_rec_rescan
 
 // rescan_rec_poll forces a full rescan of a polling recursive watcher, rebuilding the snapshot.
 rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error {

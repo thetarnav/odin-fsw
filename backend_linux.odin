@@ -4,21 +4,11 @@
 // available events from the kernel buffer into a fresh slice. No
 // accumulation between calls.
 //
-//   - Watcher_File: single inotify watch on the file's parent dir
-//   - Watcher_Dir:  single inotify watch on the directory
+//   - Watcher_File:      single inotify watch on the file's parent dir
+//   - Watcher_Dir:       single inotify watch on the directory
 //   - Watcher_Recursive: one inotify fd + one watch per subdirectory
-//
-// Internal `@(private)` helpers:
-//   - inotify_read:     drains the kernel buffer, matches events against
-//                       target_wd, appends them to `out`, returns on EAGAIN
-//   - inotify_read_rec: drains the kernel buffer for a recursive watcher,
-//                       appending all events to `out` and auto-watching
-//                       new subdirectories on .Added events
-//   - inotify_normalize: maps an inotify mask to an Event_Kind
-//   - inotify_event_name: extracts the name field from an inotify event
-//   - rec_add_watch:     adds an inotify watch on `dir` and recurses
-//                       into its subdirectories
 
+#+private package
 package fsw
 
 import "core:mem"
@@ -193,7 +183,6 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, 
 // inotify_read repeatedly reads the inotify fd until EAGAIN, appending all
 // events matching `target_wd` to `out`. Events not matching are consumed
 // from the kernel buffer and discarded.
-@(private)
 inotify_read :: proc(
 	fd: linux.Fd,
 	target_wd: linux.Wd,
@@ -231,7 +220,6 @@ inotify_read :: proc(
 // inotify_read_rec reads from a recursive watcher's inotify fd, appending
 // all events to `out`. New subdirectories are auto-watched on .Added
 // events.
-@(private)
 inotify_read_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	buf: [INOTIFY_BUF_SIZE]byte
 	for {

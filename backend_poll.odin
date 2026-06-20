@@ -16,6 +16,7 @@
 // Watcher state (prev map, snapshot maps) is allocated with the watcher's
 // allocator.
 
+#+private package
 package fsw
 
 import "core:mem"

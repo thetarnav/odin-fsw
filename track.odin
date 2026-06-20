@@ -9,9 +9,9 @@ package fsw
 @require import "base:runtime"
 @require import "core:log"
 
-when ODIN_TEST {
-	Track_Resources :: map[int]runtime.Source_Code_Location
+Track_Resources :: (map[int]runtime.Source_Code_Location when ODIN_TEST else struct {})
 
+when ODIN_TEST {
 	_track_start :: proc (resources: ^Track_Resources, loc: runtime.Source_Code_Location) {
 		resources^ = make(Track_Resources, loc=loc)
 	}
@@ -36,22 +36,14 @@ when ODIN_TEST {
 }
 
 track_start :: proc (w: ^$W, loc := #caller_location) {
-	when ODIN_TEST {
-		_track_start(&w._track_resources, loc=loc)
-	}
+	when ODIN_TEST do _track_start(&w._track_resources, loc=loc)
 }
 track_end :: proc (w: ^$W, loc := #caller_location) {
-	when ODIN_TEST {
-		_track_end(&w._track_resources, loc=loc)
-	}
+	when ODIN_TEST do _track_end(&w._track_resources, loc=loc)
 }
 track_open :: proc (w: ^$W, key: $T, loc := #caller_location) {
-	when ODIN_TEST {
-		_track_open(&w._track_resources, auto_cast key, loc)
-	}
+	when ODIN_TEST do _track_open(&w._track_resources, auto_cast key, loc)
 }
 track_close :: proc (w: ^$W, key: $T, loc := #caller_location) {
-	when ODIN_TEST {
-		_track_close(&w._track_resources, auto_cast key, loc)
-	}
+	when ODIN_TEST do _track_close(&w._track_resources, auto_cast key, loc)
 }

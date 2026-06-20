@@ -7,6 +7,7 @@
 //   - glob_rescan: full re-scan on rescan, emitting Added/Removed events
 //   - glob_get_events: pull events from the inner recursive watcher, filter, return
 
+#+private package
 package fsw
 
 import "core:os"

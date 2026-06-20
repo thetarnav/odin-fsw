@@ -9,6 +9,7 @@
 //   - Watcher_Recursive: per-subdirectory fd registration with kqueue + snapshot diff
 
 #+build darwin, netbsd, openbsd, freebsd
+#+private package
 package fsw
 
 import "core:mem"
@@ -46,7 +47,7 @@ kq_normalize :: proc(fflags: kqueue.VNode_Flags) -> Event_Kind {
 
 // Zero timespec: passed to kevent so it returns immediately instead of
 // waiting forever (which is what nil timeout means on macOS).
-@(private, rodata)
+@(rodata)
 no_wait: posix.timespec
 
 // === Watcher_File ===
@@ -262,7 +263,6 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, 
 
 // === Shared kqueue read helpers ===
 
-@(private)
 kqueue_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	for {
@@ -279,7 +279,6 @@ kqueue_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dyn
 	}
 }
 
-@(private)
 kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
@@ -310,7 +309,6 @@ kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynam
 	w.native.prev = current
 }
 
-@(private)
 kqueue_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [64]kqueue.KEvent
 	kqueue.kevent(w.native.kq, nil, events[:], &no_wait)

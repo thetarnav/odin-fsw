@@ -10,6 +10,7 @@
 //   - ReadDirectoryChangesW issues a single pending request; GetQueuedCompletionStatus
 //     with a 0ms timeout polls for completions
 
+#+private package
 package fsw
 
 import "core:mem"
@@ -308,7 +309,6 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, 
 
 // === Shared IOCP read helpers ===
 
-@(private)
 iocp_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
@@ -340,7 +340,6 @@ iocp_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynam
 	}
 }
 
-@(private)
 iocp_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
@@ -372,7 +371,6 @@ iocp_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic
 	}
 }
 
-@(private)
 iocp_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
@@ -404,7 +402,6 @@ iocp_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[d
 	}
 }
 
-@(private)
 @require_results
 process_file_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_File, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
@@ -415,7 +412,6 @@ process_file_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_
 	return {}, false
 }
 
-@(private)
 @require_results
 process_dir_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_Dir, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
@@ -427,7 +423,6 @@ process_dir_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_D
 	}, true
 }
 
-@(private)
 @require_results
 process_rec_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_Recursive, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
@@ -451,7 +446,6 @@ action_normalize :: proc(action: u32) -> Event_Kind {
 	return .Modified
 }
 
-@(private)
 @require_results
 fni_name :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION) -> string {
 	if entry.file_name_length == 0 do return ""
