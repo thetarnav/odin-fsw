@@ -1,240 +1,172 @@
-// backend_linux.odin — Linux backend using inotify + epoll.
+// backend_linux.odin — Linux inotify backend.
 //
-// Platform-specific backend compiled only on Linux.
-// Implements all backend procs for Watcher_File, Watcher_Dir, and Watcher_Recursive.
+// Non-blocking read of the inotify fd. Each get_events call reads all
+// available events from the kernel buffer into a fresh slice. No
+// accumulation between calls — the caller owns the returned array.
 //
-// Architecture:
-//   - Each watcher creates an inotify fd with inotify_init1({.NONBLOCK, .CLOEXEC})
-//   - A background thread polls the fd with linux.read(), sleeping 10ms on EAGAIN
-//   - Events are normalized via inotify_normalize() into Event_Kind values
-//   - Recursive watcher: per-subdirectory inotify watches stored in w.watches map
-//     (wd → dir_path). New subdirs are auto-watched on .Added events.
-//   - Glob routing: inotify_rec_thread checks w.user_data; if non-nil, events
-//     go through glob_filter_event instead of the direct callback.
+//   - Watcher_File: single inotify watch on the file's parent dir
+//   - Watcher_Dir:  single inotify watch on the directory
+//   - Watcher_Recursive: one inotify fd + one watch per subdirectory
 //
-// Internal helpers: to_cstring, inotify_normalize, inotify_event_name, rec_add_watch
+// inotify_read drains the kernel buffer: matches events against
+// target_wd, appends them to `out`, and returns when EAGAIN.
 
 package fsw
 
+import "core:mem"
 import "core:os"
-import "core:path/filepath"
 import "core:strings"
 import "core:sys/linux"
-import "core:thread"
-import "core:time"
+import "core:path/filepath"
 
-INOTIFY_MASK :: linux.Inotify_Event_Mask{
-	.CREATE, .MODIFY, .DELETE, .MOVED_FROM, .MOVED_TO,
-	.DELETE_SELF, .MOVE_SELF, .CLOSE_WRITE, .ISDIR,
+INOTIFY_BUF_SIZE :: 4096
+INOTIFY_MASK     :: linux.Inotify_Event_Mask{
+	.MODIFY, .CREATE, .DELETE, .DELETE_SELF,
+	.MOVE_SELF, .ATTRIB, .CLOSE_WRITE,
+} | linux.IN_MOVE
+
+// === Platform-specific native data ===
+
+Native_File :: struct {
+	fd: linux.Fd,
+	wd: linux.Wd,
 }
 
-to_cstring :: proc(s: string, allocator := context.temp_allocator) -> cstring {
-	buf := make([]byte, len(s) + 1, allocator)
-	copy(buf, s)
-	buf[len(s)] = 0
-	return cstring(&buf[0])
+Native_Dir :: struct {
+	fd: linux.Fd,
+	wd: linux.Wd,
 }
 
-inotify_normalize :: proc(mask: linux.Inotify_Event_Mask) -> Event_Kind {
-	if .Q_OVERFLOW in mask { return .Overflow }
-	if .UNMOUNT in mask || .IGNORED in mask { return .Invalidated }
-	if .MOVED_FROM in mask { return .Renamed }
-	if .MOVED_TO in mask { return .Renamed }
-	if .CREATE in mask { return .Added }
-	if .DELETE in mask || .DELETE_SELF in mask { return .Removed }
-	if .MODIFY in mask || .CLOSE_WRITE in mask || .ATTRIB in mask { return .Modified }
-	return .Modified
-}
-
-inotify_event_name :: proc(event: ^linux.Inotify_Event, allocator := context.temp_allocator) -> string {
-	if event.len == 0 { return "" }
-	name_ptr := rawptr(uintptr(&event^) + size_of(linux.Inotify_Event))
-	return strings.clone_from_cstring(cstring(name_ptr), allocator)
+Native_Recursive :: struct {
+	fd:      linux.Fd,
+	watches: map[linux.Wd]string,
 }
 
 // === Watcher_File ===
 
-backend_file_init :: proc(w: ^Watcher_File) -> Error {
+backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
+
+	track_start(w)
+
 	fd, errno := linux.inotify_init1({.NONBLOCK, .CLOEXEC})
-	if errno != .NONE {
-		return .Backend_Init_Failed
-	}
-	cs := to_cstring(w.path)
-	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
-	if errno2 != .NONE {
+	if errno != .NONE do return .Backend_Init_Failed
+	track_open(w, fd)
+	defer if err != nil {
 		linux.close(fd)
-		return .Backend_Init_Failed
+		track_close(w, fd)
 	}
-	w.native_handle = int(fd)
-	t := thread.create(inotify_file_thread)
-	t.data = rawptr(w)
-	t.user_args[0] = rawptr(uintptr(wd))
-	thread.start(t)
-	w.thread = t
+
+	cs, _ := strings.clone_to_cstring(w.path, context.temp_allocator)
+	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
+	if errno2 != .NONE do return .Backend_Init_Failed
+
+	w.native.fd = fd
+	w.native.wd = wd
+
 	return .None
 }
 
 backend_file_destroy :: proc(w: ^Watcher_File) {
-	fd := linux.Fd(w.native_handle)
-	if w.thread != nil {
-		w.running = false
-		thread.join(w.thread)
-		thread.destroy(w.thread)
-	}
-	linux.close(fd)
+	linux.close(w.native.fd)
+	track_close(w, w.native.fd)
+	track_end(w)
 }
 
-inotify_file_thread :: proc(t: ^thread.Thread) {
-	w := (^Watcher_File)(t.data)
-	fd := linux.Fd(w.native_handle)
-	wd := linux.Wd(uintptr(t.user_args[0]))
-
-	buf: [4096]byte
-	for w.running {
-		n, errno := linux.read(fd, buf[:])
-		if errno == .EAGAIN || n <= 0 {
-			time.sleep(10 * time.Millisecond)
-			continue
-		}
-		offset := 0
-		for offset < n {
-			event := (^linux.Inotify_Event)(&buf[offset])
-			if event.wd == wd {
-				name := inotify_event_name(event)
-				kind := inotify_normalize(event.mask)
-				path := w.path
-				if name != "" {
-					joined, _ := filepath.join({w.path, name}, context.temp_allocator)
-					path = joined
-				}
-				e := Event{
-					kind   = kind,
-					path   = path,
-					is_dir = .ISDIR in event.mask,
-				}
-				invoke_callback_file(w, &e)
-			}
-			offset += size_of(linux.Inotify_Event) + int(event.len)
-		}
-	}
+backend_file_get_events :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	inotify_read(w.native.fd, w.native.wd, w.path, out, allocator)
 }
 
 // === Watcher_Dir ===
 
-backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
+backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
+
+	track_start(w)
+
 	fd, errno := linux.inotify_init1({.NONBLOCK, .CLOEXEC})
-	if errno != .NONE {
-		return .Backend_Init_Failed
-	}
-	cs := to_cstring(w.path)
-	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
-	if errno2 != .NONE {
+	if errno != .NONE do return .Backend_Init_Failed
+	track_open(w, fd)
+	defer if err != nil {
 		linux.close(fd)
-		return .Backend_Init_Failed
+		track_close(w, fd)
 	}
-	w.native_handle = int(fd)
-	t := thread.create(inotify_dir_thread)
-	t.data = rawptr(w)
-	t.user_args[0] = rawptr(uintptr(wd))
-	thread.start(t)
-	w.thread = t
+
+	cs, _ := strings.clone_to_cstring(w.path, context.temp_allocator)
+	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
+	if errno2 != .NONE do return .Backend_Init_Failed
+
+	w.native.fd = fd
+	w.native.wd = wd
+
 	return .None
 }
 
 backend_dir_destroy :: proc(w: ^Watcher_Dir) {
-	fd := linux.Fd(w.native_handle)
-	if w.thread != nil {
-		w.running = false
-		thread.join(w.thread)
-		thread.destroy(w.thread)
-	}
-	linux.close(fd)
+	linux.close(w.native.fd)
+	track_close(w, w.native.fd)
+	track_end(w)
 }
 
-inotify_dir_thread :: proc(t: ^thread.Thread) {
-	w := (^Watcher_Dir)(t.data)
-	fd := linux.Fd(w.native_handle)
-	wd := linux.Wd(uintptr(t.user_args[0]))
-
-	buf: [4096]byte
-	for w.running {
-		n, errno := linux.read(fd, buf[:])
-		if errno == .EAGAIN || n <= 0 {
-			time.sleep(10 * time.Millisecond)
-			continue
-		}
-		offset := 0
-		for offset < n {
-			event := (^linux.Inotify_Event)(&buf[offset])
-			if event.wd == wd {
-				name := inotify_event_name(event)
-				kind := inotify_normalize(event.mask)
-				path := w.path
-				if name != "" {
-					joined, _ := filepath.join({w.path, name}, context.temp_allocator)
-					path = joined
-				}
-				e := Event{
-					kind   = kind,
-					path   = path,
-					is_dir = .ISDIR in event.mask,
-				}
-				invoke_callback_dir(w, &e)
-			}
-			offset += size_of(linux.Inotify_Event) + int(event.len)
-		}
-	}
+backend_dir_get_events :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	inotify_read(w.native.fd, w.native.wd, w.path, out, allocator)
 }
 
 // === Watcher_Recursive ===
 
 backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
+
+	track_start(w)
+
 	fd, errno := linux.inotify_init1({.NONBLOCK, .CLOEXEC})
-	if errno != .NONE {
-		return .Backend_Init_Failed
-	}
-	w.native_handle = int(fd)
-	w.watches = make(map[int]string, w.allocator)
+	if errno != .NONE do return .Backend_Init_Failed
+	track_open(w, fd)
+
+	w.native.fd = fd
+	w.native.watches = make(map[linux.Wd]string, w.allocator)
+
 	rec_add_watch(w, w.path)
-	t := thread.create(inotify_rec_thread)
-	t.data = rawptr(w)
-	thread.start(t)
-	w.thread = t
+
 	return .None
 }
 
 backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
-	fd := linux.Fd(w.native_handle)
-	if w.thread != nil {
-		w.running = false
-		thread.join(w.thread)
-		thread.destroy(w.thread)
+	for wd_key in w.native.watches {
+		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
 	}
-	for wd_key in w.watches {
-		linux.inotify_rm_watch(fd, linux.Wd(wd_key))
+	linux.close(w.native.fd)
+	track_close(w, w.native.fd)
+	track_end(w)
+}
+
+backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
+	for _, v in w.native.watches {
+		delete(v, w.allocator)
 	}
-	linux.close(fd)
+	delete(w.native.watches)
 }
 
 backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
-	fd := linux.Fd(w.native_handle)
-	for wd_key in w.watches {
-		linux.inotify_rm_watch(fd, linux.Wd(wd_key))
+	for wd_key in w.native.watches {
+		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
 	}
-	clear(&w.watches)
+	for _, v in w.native.watches {
+		delete(v, w.allocator)
+	}
+	clear(&w.native.watches)
 	rec_add_watch(w, w.path)
 	return .None
 }
 
 rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
-	cs := to_cstring(dir)
-	wd, errno := linux.inotify_add_watch(linux.Fd(w.native_handle), cs, INOTIFY_MASK)
+
+	cs, _ := strings.clone_to_cstring(dir, context.temp_allocator)
+	wd, errno := linux.inotify_add_watch(w.native.fd, cs, INOTIFY_MASK)
 	if errno != .NONE do return
 
-	w.watches[int(wd)] = strings.clone(dir, w.allocator)
+	w.native.watches[wd] = strings.clone(dir, w.allocator)
 
 	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
 	if read_err != nil do return
+
 	for entry in entries {
 		if entry.name == "." || entry.name == ".." do continue
 		if entry.type == .Directory {
@@ -244,46 +176,103 @@ rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	}
 }
 
-inotify_rec_thread :: proc(t: ^thread.Thread) {
-	w := (^Watcher_Recursive)(t.data)
-	fd := linux.Fd(w.native_handle)
-	gw := (^Watcher_Glob)(w.user_data)
+backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	inotify_read_rec(w, allocator, out)
+}
 
-	buf: [8192]byte
-	for w.running {
+// === Shared read helper ===
+
+// inotify_read repeatedly reads the inotify fd until EAGAIN, appending all
+// events matching `target_wd` to `out`. Events not matching are consumed
+// from the kernel buffer and discarded.
+@(private)
+inotify_read :: proc(
+	fd: linux.Fd,
+	target_wd: linux.Wd,
+	parent_path: string,
+	out: ^[dynamic]Event,
+	allocator: mem.Allocator,
+) {
+	buf: [INOTIFY_BUF_SIZE]byte
+	for {
 		n, errno := linux.read(fd, buf[:])
 		if errno == .EAGAIN || n <= 0 {
-			time.sleep(10 * time.Millisecond)
-			continue
+			break
 		}
 		offset := 0
 		for offset < n {
 			event := (^linux.Inotify_Event)(&buf[offset])
-			name := inotify_event_name(event)
-			dir_path, ok := w.watches[int(event.wd)]
-			if ok {
-				kind := inotify_normalize(event.mask)
-				path := dir_path
-				if name != "" {
-					path, _ = filepath.join({dir_path, name}, context.temp_allocator)
-				}
-				is_dir := .ISDIR in event.mask
-				// Auto-watch new subdirs BEFORE emitting event to avoid race
-				if kind == .Added && is_dir {
-					rec_add_watch(w, path)
-				}
-				e := Event{
-					kind   = kind,
-					path   = path,
-					is_dir = is_dir,
-				}
-				if gw != nil {
-					glob_filter_event(gw, &e)
-				} else {
-					invoke_callback_rec(w, &e)
-				}
+			defer offset += size_of(linux.Inotify_Event) + int(event.len)
+
+			if event.wd != target_wd do continue
+
+			ev: Event
+			ev.is_dir = .ISDIR in event.mask
+			ev.kind = inotify_normalize(event.mask)
+			if name := inotify_event_name(event); name != "" {
+				ev.path, _ = filepath.join({parent_path, name}, allocator)
+			} else {
+				ev.path = strings.clone(parent_path, allocator)
 			}
-			offset += size_of(linux.Inotify_Event) + int(event.len)
+
+			append(out, ev)
 		}
 	}
+}
+
+// inotify_read_rec reads from a recursive watcher's inotify fd, appending
+// all events to `out`. New subdirectories are auto-watched on .Added
+// events.
+@(private)
+inotify_read_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	buf: [INOTIFY_BUF_SIZE]byte
+	for {
+		n, errno := linux.read(w.native.fd, buf[:])
+		if errno == .EAGAIN || n <= 0 {
+			break
+		}
+		offset := 0
+		for offset < n {
+			event := (^linux.Inotify_Event)(&buf[offset])
+			defer offset += size_of(linux.Inotify_Event) + int(event.len)
+
+			ev: Event
+			ev.kind = inotify_normalize(event.mask)
+
+			dir_path := w.native.watches[event.wd] or_continue
+			if name := inotify_event_name(event); name != "" {
+				ev.path, _ = filepath.join({dir_path, name}, allocator)
+			} else {
+				ev.path = strings.clone(dir_path, allocator)
+			}
+
+			// Auto-watch new subdirs BEFORE emitting event to avoid race
+			ev.is_dir = .ISDIR in event.mask
+			if ev.kind == .Added && ev.is_dir {
+				rec_add_watch(w, ev.path)
+			}
+
+			append(out, ev)
+		}
+	}
+}
+
+// === Event helpers ===
+
+inotify_normalize :: proc(mask: linux.Inotify_Event_Mask) -> Event_Kind {
+	if .DELETE in mask || .DELETE_SELF in mask || .MOVED_FROM in mask {
+		return .Removed
+	}
+	if .CREATE in mask || .MOVED_TO in mask {
+		return .Added
+	}
+	if .MOVE_SELF in mask {
+		return .Renamed
+	}
+	return .Modified
+}
+
+inotify_event_name :: proc(event: ^linux.Inotify_Event) -> string {
+	if event.len == 0 do return ""
+	return string(cstring(cast([^]u8)&event.name))
 }

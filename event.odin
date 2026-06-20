@@ -1,10 +1,9 @@
-// event.odin — Core event types and callback definition.
+// event.odin — Core event types.
 //
 // This file defines the public types that represent filesystem events:
 //   - Event_Kind: the type of change (Added, Removed, Modified, Renamed, Overflow, Invalidated)
 //   - Error: error codes returned by constructors and rescan
 //   - Event: a single filesystem event with kind, path, and metadata
-//   - Event_Callback: the procedure type for user-provided callbacks
 //
 // These types are used by all watcher variants and backends.
 
@@ -27,15 +26,12 @@ Error :: enum {
 	Backend_Init_Failed, // The OS-native watcher could not be created.
 }
 
-// Event represents a single filesystem change. Passed to the user callback by pointer.
-// The path string is only valid during the callback — clone it if you need to keep it.
+// Event represents a single filesystem change. The path string is only
+// valid until the next call to get_event/get_events on the same watcher
+// (or until destroy). Clone it if you need to keep it past that.
 Event :: struct {
 	kind:     Event_Kind, // What happened.
 	path:     string,     // Absolute path of the affected file/directory.
 	old_path: string,     // Previous path (for Renamed events, currently unused).
 	is_dir:   bool,       // True if the target is a directory.
 }
-
-// Event_Callback is the procedure type for user-provided callbacks.
-// Receives a pointer to an Event. The event is only valid during the call.
-Event_Callback :: proc(event: ^Event)
