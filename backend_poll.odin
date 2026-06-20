@@ -1,6 +1,6 @@
 // backend_poll.odin — Polling backend for all platforms.
 //
-// Pull-based stat polling. No threads are started. Each get_events call
+// Pull-based stat polling. Each get_events call
 // performs a single poll cycle (one stat or one snapshot diff) and appends
 // all events to the caller's dynamic array. The user is responsible for
 // sleeping between calls.

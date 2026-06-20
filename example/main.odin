@@ -45,7 +45,7 @@ main :: proc () {
 	interval := time.Duration(poll_ms) * time.Millisecond
 
 	for {
-		events := fsw.get_events(w, context.temp_allocator)
+		events := fsw.get_events(&w, context.temp_allocator)
 		for ev in events {
 			suffix := ""
 			if ev.is_dir do suffix = "/"

@@ -64,7 +64,7 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	return .None
 }
 
-backend_file_destroy :: proc (w: ^Watcher_File) {
+backend_file_destroy :: proc (w: Watcher_File) {
 	linux.close(w.fd)
 	track_close(w, w.fd)
 	track_end(w)
@@ -98,7 +98,7 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 	return .None
 }
 
-backend_dir_destroy :: proc (w: ^Watcher_Dir) {
+backend_dir_destroy :: proc (w: Watcher_Dir) {
 	linux.close(w.fd)
 	track_close(w, w.fd)
 	track_end(w)
@@ -126,20 +126,15 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 	return .None
 }
 
-backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
-	for wd_key in w.watches {
+backend_rec_destroy :: proc (w: Watcher_Recursive) {
+	for wd_key, v in w.watches {
 		linux.inotify_rm_watch(w.fd, linux.Wd(wd_key))
-	}
-	linux.close(w.fd)
-	track_close(w, w.fd)
-	track_end(w)
-}
-
-backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
-	for _, v in w.watches {
 		delete(v, w.allocator)
 	}
 	delete(w.watches)
+	linux.close(w.fd)
+	track_close(w, w.fd)
+	track_end(w)
 }
 
 backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
