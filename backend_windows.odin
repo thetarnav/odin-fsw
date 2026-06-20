@@ -246,6 +246,9 @@ backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
 		windows.CloseHandle(w.handle)
 		track_close(w, uintptr(w.handle))
 	}
+	if w.buf != nil {
+		delete(w.buf, w.allocator)
+	}
 	track_end(w)
 }
 
