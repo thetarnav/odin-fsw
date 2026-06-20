@@ -130,9 +130,6 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	if w.native.buf != nil {
 		delete(w.native.buf[:w.native.buf_len], w.allocator)
 	}
-	if w.native.target != "" {
-		delete(w.native.target, w.allocator)
-	}
 	track_end(w)
 }
 
