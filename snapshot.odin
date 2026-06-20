@@ -29,6 +29,7 @@ File_Info :: struct {
 
 // file_stat_alloc stats a path using the provided allocator. The caller is
 // responsible for freeing the returned os.File_Info via os.file_info_delete.
+@require_results
 file_stat_alloc :: proc(path: string, allocator: mem.Allocator) -> (os.File_Info, Error) {
 	info, e := os.stat(path, allocator)
 	if e != nil {

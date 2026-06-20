@@ -127,6 +127,7 @@ Watcher_Glob :: struct {
 // watch_file creates a native watcher for a single file.
 // Initializes OS handles. Does NOT start a thread.
 // Call destroy(w) when done.
+@require_results
 watch_file :: proc(path: string, allocator := context.allocator) -> (^Watcher_File, Error) {
 
 	p, err := filepath.abs(path, allocator)
@@ -153,6 +154,7 @@ watch_file :: proc(path: string, allocator := context.allocator) -> (^Watcher_Fi
 // watch_dir creates a native watcher for a directory (non-recursive).
 // Initializes OS handles. Does NOT start a thread.
 // Only events in the immediate directory are reported.
+@require_results
 watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir, Error) {
 
 	p, err := filepath.abs(path, allocator)
@@ -180,6 +182,7 @@ watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir
 // Initializes OS handles and registers all subdirectories. Does NOT start a thread.
 // Subdirectories created after init are auto-watched when the kernel reports an
 // .Added event for them (on the first get_events call that processes the event).
+@require_results
 watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
 
 	p, err := filepath.abs(path, allocator)
@@ -207,6 +210,7 @@ watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^W
 // No thread is started. The user drives polling by calling get_events.
 // Each call performs a single stat() check; the user should sleep `latency`
 // between calls (e.g. time.sleep(latency) in their loop).
+@require_results
 watch_file_poll :: proc(path: string, latency: time.Duration, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
 
 	p, err := filepath.abs(path, allocator)
@@ -238,6 +242,7 @@ watch_file_poll :: proc(path: string, latency: time.Duration, allocator := conte
 // watch_dir_poll creates a polling watcher for a directory.
 // No thread is started. Each get_events call performs a single
 // snapshot diff.
+@require_results
 watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
 
 	p, err := filepath.abs(path, allocator)
@@ -262,6 +267,7 @@ watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := contex
 // watch_dir_poll_recursive creates a polling watcher for a directory tree.
 // No thread is started. Each get_events call performs a single
 // recursive snapshot diff.
+@require_results
 watch_dir_poll_recursive :: proc(path: string, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
@@ -284,6 +290,7 @@ watch_dir_poll_recursive :: proc(path: string, latency: time.Duration, allocator
 // The static prefix of the pattern is used as the watch root (e.g. "/tmp" from "/tmp/*.txt").
 // The directory is watched recursively; only files matching the pattern trigger events.
 // No thread is started. Performs an initial scan to detect pre-existing matching files.
+@require_results
 watch_glob :: proc(pattern: string, allocator := context.allocator) -> (^Watcher_Glob, Error) {
 
 	root, pat := glob_extract_root(pattern)
@@ -405,6 +412,7 @@ destroy :: proc {
 // allocated with `allocator` (defaults to context.allocator).
 // Pass context.temp_allocator if you don't plan to store the events.
 // For native backends, performs a non-blocking read of the OS notification queue.
+@require_results
 get_events_file :: proc(w: ^Watcher_File, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	backend_file_get_events(w, allocator, &events)
@@ -414,6 +422,7 @@ get_events_file :: proc(w: ^Watcher_File, allocator := context.allocator) -> []E
 
 // get_events_dir returns all available events from a Watcher_Dir.
 // For native backends, performs a non-blocking read of the OS notification queue.
+@require_results
 get_events_dir :: proc(w: ^Watcher_Dir, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	backend_dir_get_events(w, allocator, &events)
@@ -423,6 +432,7 @@ get_events_dir :: proc(w: ^Watcher_Dir, allocator := context.allocator) -> []Eve
 
 // get_events_rec returns all available events from a Watcher_Recursive.
 // For native backends, performs a non-blocking read of the OS notification queue.
+@require_results
 get_events_rec :: proc(w: ^Watcher_Recursive, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	backend_rec_get_events(w, allocator, &events)
@@ -433,6 +443,7 @@ get_events_rec :: proc(w: ^Watcher_Recursive, allocator := context.allocator) ->
 get_events_glob :: glob_get_events
 
 // get_events_file_poll returns all available events from a Watcher_File_Poll.
+@require_results
 get_events_file_poll :: proc(w: ^Watcher_File_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 4, allocator)
 	poll_file_get_events(w, allocator, &events)
@@ -441,6 +452,7 @@ get_events_file_poll :: proc(w: ^Watcher_File_Poll, allocator := context.allocat
 }
 
 // get_events_dir_poll returns all available events from a Watcher_Dir_Poll.
+@require_results
 get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	poll_dir_get_events(w, allocator, &events)
@@ -449,6 +461,7 @@ get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll, allocator := context.allocator
 }
 
 // get_events_rec_poll returns all available events from a Watcher_Recursive_Poll.
+@require_results
 get_events_rec_poll :: proc(w: ^Watcher_Recursive_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	poll_rec_get_events(w, allocator, &events)

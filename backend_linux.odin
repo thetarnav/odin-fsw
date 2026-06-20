@@ -267,6 +267,7 @@ inotify_read_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^
 
 // === Event helpers ===
 
+@require_results
 inotify_normalize :: proc(mask: linux.Inotify_Event_Mask) -> Event_Kind {
 	if .DELETE in mask || .DELETE_SELF in mask || .MOVED_FROM in mask {
 		return .Removed
@@ -280,6 +281,7 @@ inotify_normalize :: proc(mask: linux.Inotify_Event_Mask) -> Event_Kind {
 	return .Modified
 }
 
+@require_results
 inotify_event_name :: proc(event: ^linux.Inotify_Event) -> string {
 	if event.len == 0 do return ""
 	return string(cstring(cast([^]u8)&event.name))

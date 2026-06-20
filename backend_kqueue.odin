@@ -35,6 +35,7 @@ Native_Recursive :: struct {
 	prev:    map[string]map[string]File_Info,
 }
 
+@require_results
 kq_normalize :: proc(fflags: kqueue.VNode_Flags) -> Event_Kind {
 	if .Delete in fflags || .Revoke in fflags { return .Removed }
 	if .Rename in fflags { return .Renamed }

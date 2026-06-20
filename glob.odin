@@ -13,6 +13,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 
+@require_results
 glob_extract_root :: proc(pattern: string) -> (root: string, remainder: string) {
 	i := 0
 	for i < len(pattern) {
@@ -40,6 +41,7 @@ glob_extract_root :: proc(pattern: string) -> (root: string, remainder: string) 
 	return
 }
 
+@require_results
 glob_match_path :: proc(pattern: string, path: string) -> bool {
 	ok, _ := filepath.match(pattern, path)
 	return ok
@@ -83,6 +85,7 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 // the glob filter. Non-matching events are consumed and discarded; matching
 // events are cloned and returned. The returned slice and its path strings
 // are allocated with `allocator`.
+@require_results
 glob_get_events :: proc(w: ^Watcher_Glob, allocator := context.allocator) -> []Event {
 
 	inner_events := get_events(&w.inner, context.temp_allocator)
@@ -104,6 +107,7 @@ glob_get_events :: proc(w: ^Watcher_Glob, allocator := context.allocator) -> []E
 // to use as the event's path, and whether the event matches the pattern.
 // The returned key_path is owned by matched_files and remains valid until
 // that key is removed.
+@require_results
 glob_filter_event :: proc(w: ^Watcher_Glob, event: Event) -> (key_path: string, matched: bool) {
 
 	#partial switch event.kind {

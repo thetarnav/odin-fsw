@@ -405,6 +405,7 @@ iocp_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[d
 }
 
 @(private)
+@require_results
 process_file_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_File, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
 	if name == w.native.target {
@@ -415,6 +416,7 @@ process_file_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_
 }
 
 @(private)
+@require_results
 process_dir_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_Dir, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
 	fullpath, _ := filepath.join({w.path, name}, allocator)
@@ -426,6 +428,7 @@ process_dir_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_D
 }
 
 @(private)
+@require_results
 process_rec_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_Recursive, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
 	fullpath, _ := filepath.join({w.path, name}, allocator)
@@ -436,6 +439,7 @@ process_rec_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_R
 	}, true
 }
 
+@require_results
 action_normalize :: proc(action: u32) -> Event_Kind {
 	switch action {
 	case 1: return .Added       // FILE_ACTION_ADDED
@@ -448,6 +452,7 @@ action_normalize :: proc(action: u32) -> Event_Kind {
 }
 
 @(private)
+@require_results
 fni_name :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION) -> string {
 	if entry.file_name_length == 0 do return ""
 	name_u16 := ([^]u16)(&entry.file_name[0])
