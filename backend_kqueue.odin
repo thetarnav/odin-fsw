@@ -81,17 +81,17 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.native.kq   = kq
-	w.native.file = file
+	w.kq   = kq
+	w.file = file
 
 	return .None
 }
 
 backend_file_destroy :: proc (w: ^Watcher_File) {
-	posix.close(w.native.kq)
-	track_close(w, w.native.kq)
-	os.close(w.native.file)
-	track_close(w, uintptr(w.native.file))
+	posix.close(w.kq)
+	track_close(w, w.kq)
+	os.close(w.file)
+	track_close(w, uintptr(w.file))
 	track_end(w)
 }
 
@@ -130,22 +130,22 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.native.kq   = kq
-	w.native.file = file
-	w.native.prev = make(map[string]File_Info, w.allocator)
+	w.kq   = kq
+	w.file = file
+	w.prev = make(map[string]File_Info, w.allocator)
 
-	snapshot_dir_alloc(w.path, &w.native.prev, w.allocator, fullpath=false, recursive=false)
+	snapshot_dir_alloc(w.path, &w.prev, w.allocator, fullpath=false, recursive=false)
 
 	return .None
 }
 
 backend_dir_destroy :: proc (w: ^Watcher_Dir) {
-	posix.close(w.native.kq)
-	track_close(w, w.native.kq)
-	os.close(w.native.file)
-	track_close(w, uintptr(w.native.file))
-	for k in w.native.prev do delete(k, w.allocator)
-	delete(w.native.prev)
+	posix.close(w.kq)
+	track_close(w, w.kq)
+	os.close(w.file)
+	track_close(w, uintptr(w.file))
+	for k in w.prev do delete(k, w.allocator)
+	delete(w.prev)
 	track_end(w)
 }
 
@@ -163,9 +163,9 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 	if errno != .NONE do return .Backend_Init_Failed
 	track_open(w, kq)
 
-	w.native.kq      = kq
-	w.native.watches = make(map[int]string, w.allocator)
-	w.native.prev    = make(map[string]map[string]File_Info, w.allocator)
+	w.kq      = kq
+	w.watches = make(map[int]string, w.allocator)
+	w.prev    = make(map[string]map[string]File_Info, w.allocator)
 
 	kqueue_rec_add_watch(w, w.path)
 
@@ -173,9 +173,9 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 }
 
 backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
-	posix.close(w.native.kq)
-	track_close(w, w.native.kq)
-	for fd_key in w.native.watches {
+	posix.close(w.kq)
+	track_close(w, w.kq)
+	for fd_key in w.watches {
 		posix.close(posix.FD(fd_key))
 		track_close(w, fd_key)
 	}
@@ -183,31 +183,31 @@ backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
 }
 
 backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
-	for _, v in w.native.watches {
+	for _, v in w.watches {
 		delete(v, w.allocator)
 	}
-	delete(w.native.watches)
-	for _, inner in w.native.prev {
+	delete(w.watches)
+	for _, inner in w.prev {
 		for k in inner {
 			delete(k, w.allocator)
 		}
 		delete(inner)
 	}
-	delete(w.native.prev)
+	delete(w.prev)
 }
 
 backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
-	for fd_key in w.native.watches {
+	for fd_key in w.watches {
 		posix.close(posix.FD(fd_key))
 		track_close(w, fd_key)
 	}
-	for _, v in w.native.watches do delete(v, w.allocator)
-	clear(&w.native.watches)
-	for _, inner in w.native.prev {
+	for _, v in w.watches do delete(v, w.allocator)
+	clear(&w.watches)
+	for _, inner in w.prev {
 		for k in inner do delete(k, w.allocator)
 		delete(inner)
 	}
-	clear(&w.native.prev)
+	clear(&w.prev)
 	kqueue_rec_add_watch(w, w.path)
 	return .None
 }
@@ -227,18 +227,18 @@ kqueue_rec_add_watch :: proc (w: ^Watcher_Recursive, dir: string) {
 		flags  = {.Add, .Clear},
 	}
 	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
-	_, errno2 := kqueue.kevent(w.native.kq, []kqueue.KEvent{ev}, nil, nil)
+	_, errno2 := kqueue.kevent(w.kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE {
 		posix.close(fd)
 		track_close(w, fd)
 		return
 	}
 
-	w.native.watches[int(fd)] = strings.clone(dir, w.allocator)
+	w.watches[int(fd)] = strings.clone(dir, w.allocator)
 
 	dir_prev := make(map[string]File_Info, w.allocator)
 	snapshot_dir_alloc(dir, &dir_prev, w.allocator, fullpath=false, recursive=false)
-	w.native.prev[dir] = dir_prev
+	w.prev[dir] = dir_prev
 
 	entries, read_err := os.read_all_directory_by_path(dir, w.allocator)
 	if read_err != nil do return
@@ -266,7 +266,7 @@ backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator,
 kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	for {
-		n, _ := kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
+		n, _ := kqueue.kevent(w.kq, nil, events[:], &no_wait)
 		if n <= 0 do break
 		ev := events[0]
 		if ev.filter == .VNode {
@@ -281,9 +281,9 @@ kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 
 kqueue_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
-	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
+	_, _ = kqueue.kevent(w.kq, nil, events[:], &no_wait)
 
-	old := w.native.prev
+	old := w.prev
 	current := make(map[string]File_Info, w.allocator)
 	snapshot_dir_alloc(w.path, &current, w.allocator, fullpath=false, recursive=false)
 
@@ -306,14 +306,14 @@ kqueue_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dyna
 
 	for k in old { delete(k, w.allocator) }
 	delete(old)
-	w.native.prev = current
+	w.prev = current
 }
 
 kqueue_drain_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [64]kqueue.KEvent
-	kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
+	kqueue.kevent(w.kq, nil, events[:], &no_wait)
 
-	for dir_path, dir_prev in w.native.prev {
+	for dir_path, dir_prev in w.prev {
 		current := make(map[string]File_Info, w.allocator)
 		snapshot_dir_alloc(dir_path, &current, w.allocator, fullpath=false, recursive=false)
 
@@ -342,6 +342,6 @@ kqueue_drain_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: 
 
 		for k in dir_prev { delete(k, w.allocator) }
 		delete(dir_prev)
-		w.native.prev[dir_path] = current
+		w.prev[dir_path] = current
 	}
 }

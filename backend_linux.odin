@@ -58,20 +58,20 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.native.fd = fd
-	w.native.wd = wd
+	w.fd = fd
+	w.wd = wd
 
 	return .None
 }
 
 backend_file_destroy :: proc (w: ^Watcher_File) {
-	linux.close(w.native.fd)
-	track_close(w, w.native.fd)
+	linux.close(w.fd)
+	track_close(w, w.fd)
 	track_end(w)
 }
 
 backend_file_get_events :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
-	inotify_read(w.native.fd, w.native.wd, w.path, out, allocator)
+	inotify_read(w.fd, w.wd, w.path, out, allocator)
 }
 
 // === Watcher_Dir ===
@@ -92,20 +92,20 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.native.fd = fd
-	w.native.wd = wd
+	w.fd = fd
+	w.wd = wd
 
 	return .None
 }
 
 backend_dir_destroy :: proc (w: ^Watcher_Dir) {
-	linux.close(w.native.fd)
-	track_close(w, w.native.fd)
+	linux.close(w.fd)
+	track_close(w, w.fd)
 	track_end(w)
 }
 
 backend_dir_get_events :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
-	inotify_read(w.native.fd, w.native.wd, w.path, out, allocator)
+	inotify_read(w.fd, w.wd, w.path, out, allocator)
 }
 
 // === Watcher_Recursive ===
@@ -118,8 +118,8 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 	if errno != .NONE do return .Backend_Init_Failed
 	track_open(w, fd)
 
-	w.native.fd = fd
-	w.native.watches = make(map[linux.Wd]string, w.allocator)
+	w.fd = fd
+	w.watches = make(map[linux.Wd]string, w.allocator)
 
 	rec_add_watch(w, w.path)
 
@@ -127,29 +127,29 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 }
 
 backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
-	for wd_key in w.native.watches {
-		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
+	for wd_key in w.watches {
+		linux.inotify_rm_watch(w.fd, linux.Wd(wd_key))
 	}
-	linux.close(w.native.fd)
-	track_close(w, w.native.fd)
+	linux.close(w.fd)
+	track_close(w, w.fd)
 	track_end(w)
 }
 
 backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
-	for _, v in w.native.watches {
+	for _, v in w.watches {
 		delete(v, w.allocator)
 	}
-	delete(w.native.watches)
+	delete(w.watches)
 }
 
 backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
-	for wd_key in w.native.watches {
-		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
+	for wd_key in w.watches {
+		linux.inotify_rm_watch(w.fd, linux.Wd(wd_key))
 	}
-	for _, v in w.native.watches {
+	for _, v in w.watches {
 		delete(v, w.allocator)
 	}
-	clear(&w.native.watches)
+	clear(&w.watches)
 	rec_add_watch(w, w.path)
 	return .None
 }
@@ -157,10 +157,10 @@ backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
 rec_add_watch :: proc (w: ^Watcher_Recursive, dir: string) {
 
 	cs, _ := strings.clone_to_cstring(dir, context.temp_allocator)
-	wd, errno := linux.inotify_add_watch(w.native.fd, cs, INOTIFY_MASK)
+	wd, errno := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
 	if errno != .NONE do return
 
-	w.native.watches[wd] = strings.clone(dir, w.allocator)
+	w.watches[wd] = strings.clone(dir, w.allocator)
 
 	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
 	if read_err != nil do return
@@ -223,7 +223,7 @@ inotify_read :: proc (
 inotify_read_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	buf: [INOTIFY_BUF_SIZE]byte
 	for {
-		n, errno := linux.read(w.native.fd, buf[:])
+		n, errno := linux.read(w.fd, buf[:])
 		if errno == .EAGAIN || n <= 0 {
 			break
 		}
@@ -235,7 +235,7 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: 
 			ev: Event
 			ev.kind = inotify_normalize(event.mask)
 
-			dir_path := w.native.watches[event.wd] or_continue
+			dir_path := w.watches[event.wd] or_continue
 			if name := inotify_event_name(event); name != "" {
 				ev.path, _ = filepath.join({dir_path, name}, allocator)
 			} else {

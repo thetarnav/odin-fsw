@@ -19,38 +19,25 @@ import "core:strings"
 import "core:sys/windows"
 
 NOTIFY_FILTER :: windows.FILE_NOTIFY_CHANGE_FILE_NAME   |
-                windows.FILE_NOTIFY_CHANGE_DIR_NAME    |
-                windows.FILE_NOTIFY_CHANGE_ATTRIBUTES  |
-                windows.FILE_NOTIFY_CHANGE_SIZE       |
-                windows.FILE_NOTIFY_CHANGE_LAST_WRITE
-
-Native_File :: struct {
-	handle:     windows.HANDLE,
-	event:      windows.HANDLE,
-	iocp:       windows.HANDLE,
-	buf:        [^]u8,
-	buf_len:    int,
-	overlapped: ^windows.OVERLAPPED,
-	target:     string,
-}
+                 windows.FILE_NOTIFY_CHANGE_DIR_NAME    |
+                 windows.FILE_NOTIFY_CHANGE_ATTRIBUTES  |
+                 windows.FILE_NOTIFY_CHANGE_SIZE        |
+                 windows.FILE_NOTIFY_CHANGE_LAST_WRITE
 
 Native_Dir :: struct {
 	handle:     windows.HANDLE,
 	event:      windows.HANDLE,
 	iocp:       windows.HANDLE,
-	buf:        [^]u8,
-	buf_len:    int,
-	overlapped: ^windows.OVERLAPPED,
+	buf:        []u8,
+	overlapped: windows.OVERLAPPED,
 }
 
-Native_Recursive :: struct {
-	handle:     windows.HANDLE,
-	event:      windows.HANDLE,
-	iocp:       windows.HANDLE,
-	buf:        [^]u8,
-	buf_len:    int,
-	overlapped: ^windows.OVERLAPPED,
+Native_File :: struct {
+	using dir:  Native_Dir,
+	target:     string,
 }
+
+Native_Recursive :: Native_Dir
 
 // === Watcher_File ===
 
@@ -58,8 +45,7 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 
 	track_start(w)
 
-	dir, base := filepath.split(w.path)
-	_ = base
+	dir, _ := filepath.split(w.path)
 	dir = dir if dir != "" else "."
 
 	wpath := windows.utf8_to_wstring_alloc(dir, context.temp_allocator)
@@ -83,53 +69,43 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil do return .Backend_Init_Failed
-	track_open(w, int(uintptr(event)))
+	track_open(w, uintptr(event))
 	defer if err != nil {
 		windows.CloseHandle(event)
-		track_close(w, int(uintptr(event)))
-	}
-
-	overlapped := new(windows.OVERLAPPED, w.allocator)
-	overlapped.hEvent = event
-	defer if err != nil {
-		free(overlapped, w.allocator)
+		track_close(w, uintptr(event))
 	}
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
 	if iocp == nil do return .Backend_Init_Failed
 	track_open(w, uintptr(iocp))
 
-	buf := make([]u8, 4096, w.allocator)
-	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
+	w.overlapped = windows.OVERLAPPED{hEvent=event}
+	w.buf        = make([]u8, 4096, w.allocator)
+	w.handle     = handle
+	w.event      = event
+	w.iocp       = iocp
+	w.target     = filepath.base(w.path)
 
-	w.native.handle     = handle
-	w.native.event      = event
-	w.native.iocp       = iocp
-	w.native.buf        = raw_data(buf)
-	w.native.buf_len    = len(buf)
-	w.native.overlapped = overlapped
-	w.native.target     = filepath.base(w.path)
+	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, &w.overlapped, nil)
+
 	return .None
 }
 
 backend_file_destroy :: proc (w: ^Watcher_File) {
-	if w.native.iocp != nil {
-		windows.CloseHandle(w.native.iocp)
-		track_close(w, uintptr(w.native.iocp))
+	if w.iocp != nil {
+		windows.CloseHandle(w.iocp)
+		track_close(w, uintptr(w.iocp))
 	}
-	if w.native.event != nil {
-		windows.CloseHandle(w.native.event)
-		track_close(w, int(uintptr(w.native.event)))
+	if w.event != nil {
+		windows.CloseHandle(w.event)
+		track_close(w, uintptr(w.event))
 	}
-	if w.native.handle != nil {
-		windows.CloseHandle(w.native.handle)
-		track_close(w, uintptr(w.native.handle))
+	if w.handle != nil {
+		windows.CloseHandle(w.handle)
+		track_close(w, uintptr(w.handle))
 	}
-	if w.native.overlapped != nil {
-		free(w.native.overlapped, w.allocator)
-	}
-	if w.native.buf != nil {
-		delete(w.native.buf[:w.native.buf_len], w.allocator)
+	if w.buf != nil {
+		delete(w.buf, w.allocator)
 	}
 	track_end(w)
 }
@@ -140,7 +116,7 @@ backend_file_get_events :: proc (w: ^Watcher_File, allocator: mem.Allocator, out
 
 // === Watcher_Dir ===
 
-backend_dir_init :: proc (w: ^Watcher_Dir) -> Error {
+backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 
 	track_start(w)
 
@@ -157,58 +133,50 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> Error {
 		nil,
 	)
 	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
-	track_open(w, int(uintptr(handle)))
+	track_open(w, uintptr(handle))
+	defer if err != nil {
+		windows.CloseHandle(handle)
+		track_close(w, uintptr(handle))
+	}
 
 	event := windows.CreateEventW(nil, true, false, nil)
-	if event == nil {
-		windows.CloseHandle(handle)
-		return .Backend_Init_Failed
+	if event == nil do return .Backend_Init_Failed
+	track_open(w, uintptr(event))
+	defer if err != nil {
+		windows.CloseHandle(event)
+		track_close(w, uintptr(event))
 	}
-	track_open(w, int(uintptr(event)))
-	overlapped := new(windows.OVERLAPPED, w.allocator)
-	overlapped.hEvent = event
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
-	if iocp == nil {
-		windows.CloseHandle(event)
-		track_close(w, int(uintptr(event)))
-		windows.CloseHandle(handle)
-		track_close(w, int(uintptr(handle)))
-		free(overlapped, w.allocator)
-		return .Backend_Init_Failed
-	}
-	track_open(w, int(uintptr(iocp)))
+	if iocp == nil do return .Backend_Init_Failed
+	track_open(w, uintptr(iocp))
 
-	buf := make([]u8, 4096, w.allocator)
-	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
+	w.overlapped = windows.OVERLAPPED{hEvent=event}
+	w.buf        = make([]u8, 4096, w.allocator)
+	w.handle     = handle
+	w.event      = event
+	w.iocp       = iocp
 
-	w.native.handle = handle
-	w.native.event = event
-	w.native.iocp = iocp
-	w.native.buf = raw_data(buf)
-	w.native.buf_len = len(buf)
-	w.native.overlapped = overlapped
+	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, &w.overlapped, nil)
+
 	return .None
 }
 
 backend_dir_destroy :: proc (w: ^Watcher_Dir) {
-	if w.native.iocp != nil {
-		windows.CloseHandle(w.native.iocp)
-		track_close(w, int(uintptr(w.native.iocp)))
+	if w.iocp != nil {
+		windows.CloseHandle(w.iocp)
+		track_close(w, uintptr(w.iocp))
 	}
-	if w.native.event != nil {
-		windows.CloseHandle(w.native.event)
-		track_close(w, int(uintptr(w.native.event)))
+	if w.event != nil {
+		windows.CloseHandle(w.event)
+		track_close(w, uintptr(w.event))
 	}
-	if w.native.handle != nil {
-		windows.CloseHandle(w.native.handle)
-		track_close(w, int(uintptr(w.native.handle)))
+	if w.handle != nil {
+		windows.CloseHandle(w.handle)
+		track_close(w, uintptr(w.handle))
 	}
-	if w.native.overlapped != nil {
-		free(w.native.overlapped, w.allocator)
-	}
-	if w.native.buf != nil {
-		delete(w.native.buf[:w.native.buf_len], w.allocator)
+	if w.buf != nil {
+		delete(w.buf, w.allocator)
 	}
 	track_end(w)
 }
@@ -219,7 +187,7 @@ backend_dir_get_events :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: 
 
 // === Watcher_Recursive ===
 
-backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
+backend_rec_init :: proc (w: ^Watcher_Recursive) -> (err: Error) {
 
 	track_start(w)
 
@@ -236,58 +204,50 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 		nil,
 	)
 	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
-	track_open(w, int(uintptr(handle)))
+	track_open(w, uintptr(handle))
+	defer if err != nil {
+		windows.CloseHandle(handle)
+		track_close(w, uintptr(handle))
+	}
 
 	event := windows.CreateEventW(nil, true, false, nil)
-	if event == nil {
-		windows.CloseHandle(handle)
-		return .Backend_Init_Failed
+	if event == nil do return .Backend_Init_Failed
+	track_open(w, uintptr(event))
+	defer if err != nil {
+		windows.CloseHandle(event)
+		track_close(w, uintptr(event))
 	}
-	track_open(w, int(uintptr(event)))
-	overlapped := new(windows.OVERLAPPED, w.allocator)
-	overlapped.hEvent = event
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
-	if iocp == nil {
-		windows.CloseHandle(event)
-		track_close(w, int(uintptr(event)))
-		windows.CloseHandle(handle)
-		track_close(w, int(uintptr(handle)))
-		free(overlapped, w.allocator)
-		return .Backend_Init_Failed
-	}
-	track_open(w, int(uintptr(iocp)))
+	if iocp == nil do return .Backend_Init_Failed
+	track_open(w, uintptr(iocp))
 
-	buf := make([]u8, 8192, w.allocator)
-	windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), true, NOTIFY_FILTER, nil, overlapped, nil)
+	w.overlapped = windows.OVERLAPPED{hEvent=event}
+	w.buf        = make([]u8, 8192, w.allocator)
+	w.handle     = handle
+	w.event      = event
+	w.iocp       = iocp
 
-	w.native.handle = handle
-	w.native.event = event
-	w.native.iocp = iocp
-	w.native.buf = raw_data(buf)
-	w.native.buf_len = len(buf)
-	w.native.overlapped = overlapped
+	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), true, NOTIFY_FILTER, nil, &w.overlapped, nil)
+
 	return .None
 }
 
 backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
-	if w.native.iocp != nil {
-		windows.CloseHandle(w.native.iocp)
-		track_close(w, int(uintptr(w.native.iocp)))
+	if w.iocp != nil {
+		windows.CloseHandle(w.iocp)
+		track_close(w, uintptr(w.iocp))
 	}
-	if w.native.event != nil {
-		windows.CloseHandle(w.native.event)
-		track_close(w, int(uintptr(w.native.event)))
+	if w.event != nil {
+		windows.CloseHandle(w.event)
+		track_close(w, uintptr(w.event))
 	}
-	if w.native.handle != nil {
-		windows.CloseHandle(w.native.handle)
-		track_close(w, int(uintptr(w.native.handle)))
+	if w.handle != nil {
+		windows.CloseHandle(w.handle)
+		track_close(w, uintptr(w.handle))
 	}
-	if w.native.overlapped != nil {
-		free(w.native.overlapped, w.allocator)
-	}
-	if w.native.buf != nil {
-		delete(w.native.buf[:w.native.buf_len], w.allocator)
+	if w.buf != nil {
+		delete(w.buf, w.allocator)
 	}
 	track_end(w)
 }
@@ -312,21 +272,16 @@ backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator,
 iocp_drain :: proc (w: ^$W, allocator: mem.Allocator, out: ^[dynamic]Event)
 	where W == Watcher_File || W == Watcher_Dir || W == Watcher_Recursive
 {
-	handle     := w.native.handle
-	iocp       := w.native.iocp
-	event      := w.native.event
-	buf        := w.native.buf[:w.native.buf_len]
-	overlapped := w.native.overlapped
-
 	for {
-		bytes: windows.DWORD = 0
-		key: windows.ULONG_PTR = 0
-		overlapped_out: ^windows.OVERLAPPED = nil
-		windows.GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped_out, 50)
+		bytes:          windows.DWORD
+		key:            windows.ULONG_PTR
+		overlapped_out: ^windows.OVERLAPPED
+
+		windows.GetQueuedCompletionStatus(w.iocp, &bytes, &key, &overlapped_out, 50)
 		if overlapped_out == nil do break
 
 		if bytes > 0 {
-			entry := (^windows.FILE_NOTIFY_INFORMATION)(&buf[0])
+			entry := (^windows.FILE_NOTIFY_INFORMATION)(&w.buf[0])
 			for {
 				name := fni_name(entry)
 				kind := action_normalize(entry.action)
@@ -334,7 +289,7 @@ iocp_drain :: proc (w: ^$W, allocator: mem.Allocator, out: ^[dynamic]Event)
 				e: Event
 				matched: bool
 				when W == Watcher_File {
-					if name == w.native.target {
+					if name == w.target {
 						e = {kind = kind, path = strings.clone(w.path, allocator)}
 						matched = true
 					}
@@ -357,8 +312,8 @@ iocp_drain :: proc (w: ^$W, allocator: mem.Allocator, out: ^[dynamic]Event)
 			}
 		}
 
-		windows.ResetEvent(event)
-		windows.ReadDirectoryChangesW(handle, raw_data(buf), windows.DWORD(len(buf)), false, NOTIFY_FILTER, nil, overlapped, nil)
+		windows.ResetEvent(w.event)
+		windows.ReadDirectoryChangesW(w.handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, &w.overlapped, nil)
 	}
 }
 
@@ -377,10 +332,12 @@ action_normalize :: proc (action: u32) -> Event_Kind {
 @require_results
 fni_name :: proc (entry: ^windows.FILE_NOTIFY_INFORMATION) -> string {
 	if entry.file_name_length == 0 do return ""
+
 	name_u16 := ([^]u16)(&entry.file_name[0])
 	name_len := int(entry.file_name_length) / 2
-	slice := name_u16[:name_len]
-	buf := make([]u8, name_len*4, context.temp_allocator)
-	s := windows.utf16_to_utf8_buf(buf, slice)
-	return strings.clone(s, context.temp_allocator)
+	slice    := name_u16[:name_len]
+	buf      := make([]u8, name_len*4, context.temp_allocator)
+	str      := windows.utf16_to_utf8_buf(buf, slice)
+
+	return strings.clone(str, context.temp_allocator)
 }
