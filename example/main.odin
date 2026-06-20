@@ -19,8 +19,7 @@ import fsw ".."
 main :: proc() {
 	args := os.args[1:]
 	if len(args) < 1 {
-		fmt.eprintln("usage: fsw_demo <glob-pattern> [poll-interval-ms]")
-		os.exit(1)
+		fmt.panicf("usage: fsw_demo <glob-pattern> [poll-interval-ms]\n")
 	}
 
 	pattern := args[0]
@@ -29,16 +28,14 @@ main :: proc() {
 	if len(args) >= 2 {
 		n, ok := strconv.parse_int(args[1])
 		if !ok || n < 1 {
-			fmt.eprintfln("invalid poll interval: %s", args[1])
-			os.exit(1)
+			fmt.panicf("invalid poll interval: %s\n", args[1])
 		}
 		poll_ms = n
 	}
 
 	w, err := fsw.watch_glob(pattern)
 	if err != .None {
-		fmt.eprintfln("watch_glob(%q) failed: %v", pattern, err)
-		os.exit(1)
+		fmt.panicf("watch_glob(%q) failed: %v\n", pattern, err)
 	}
 	defer fsw.destroy(w)
 
