@@ -125,7 +125,7 @@ glob_filter_event :: proc(w: ^Watcher_Glob, event: Event) -> (key_path: string, 
 			if key == event.path {
 				delete_key(&w.matched_files, key)
 				delete(key, w.allocator)
-				return key, true
+				return event.path, true
 			}
 		}
 	case .Modified:

@@ -248,6 +248,15 @@ inotify_read_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^
 				rec_add_watch(w, ev.path)
 			}
 
+			// Coalesce consecutive .Modified events for the same path.
+			if ev.kind == .Modified && len(out) > 0 {
+				last := &out[len(out)-1]
+				if last.kind == .Modified && last.path == ev.path {
+					delete(ev.path, allocator)
+					continue
+				}
+			}
+
 			append(out, ev)
 		}
 	}
