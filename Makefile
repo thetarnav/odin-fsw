@@ -1,4 +1,7 @@
-.PHONY: test check
+.PHONY: test check example
+
+example:
+	odin run example -- "./*.odin"
 
 test:
 	odin test . -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true
