@@ -42,52 +42,62 @@ Native_Recursive :: Native_Dir
 // === Watcher_File ===
 
 backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
-	track_start(w)
-
-	w.target = filepath.base(w.path)
-
-	dir, _ := filepath.split(w.path)
-	dir = dir if dir != "" else "."
-
-	return native_dir_init(w, dir, w.allocator, false, 4096)
+	return native_init(w)
 }
-
 backend_file_destroy :: proc (w: Watcher_File) {
-	native_dir_destroy(w, w.allocator)
-	track_end(w)
+	native_destroy(w)
 }
-
 backend_file_get_events :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	iocp_drain(w, allocator, out)
 }
 
 backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
-	track_start(w)
-	return native_dir_init(w, w.path, w.allocator, false, 4096)
+	return native_init(w)
 }
-
 backend_dir_destroy :: proc (w: Watcher_Dir) {
-	native_dir_destroy(w, w.allocator)
-	track_end(w)
+	native_destroy(w)
 }
-
 backend_dir_get_events :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	iocp_drain(w, allocator, out)
 }
 
 backend_rec_init :: proc (w: ^Watcher_Recursive) -> (err: Error) {
-	track_start(w)
-	return native_dir_init(w, w.path, w.allocator, true, 8192)
+	return native_init(w)
 }
-
 backend_rec_destroy :: proc (w: Watcher_Recursive) {
-	native_dir_destroy(w, w.allocator)
-	track_end(w)
+	native_destroy(w)
+}
+backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
+	// Windows ReadDirectoryChangesW with bWatchSubtree=TRUE
+	// automatically tracks new/deleted subdirectories.
+	return .None
+}
+backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	iocp_drain(w, allocator, out)
 }
 
-native_dir_init :: proc (w: ^Native_Dir, path: string, allocator: mem.Allocator, recursive: bool, buf_size: int) -> (err: Error) {
+native_init :: proc (w: ^$W) -> (err: Error) {
 
-	wpath := windows.utf8_to_wstring_alloc(path, context.temp_allocator)
+	track_start(w)
+
+	when W == Watcher_File {
+		w.target = filepath.base(w.path)
+
+		dir, _ := filepath.split(w.path)
+		dir = dir if dir != "" else "."
+	} else {
+		dir := w.path
+	}
+
+	when W == Watcher_Recursive {
+		buf_size  := 8192
+		recursive := true
+	} else {
+		buf_size  := 4096
+		recursive := false
+	}
+
+	wpath := windows.utf8_to_wstring_alloc(dir, context.temp_allocator)
 	if wpath == nil do return .Backend_Init_Failed
 
 	handle := windows.CreateFileW(
@@ -118,12 +128,12 @@ native_dir_init :: proc (w: ^Native_Dir, path: string, allocator: mem.Allocator,
 	if iocp == nil do return .Backend_Init_Failed
 	track_open(w, uintptr(iocp))
 
-	overlapped, ovl_err := new(windows.OVERLAPPED, allocator)
+	overlapped, ovl_err := new(windows.OVERLAPPED, w.allocator)
 	if ovl_err != nil do return .Backend_Init_Failed
 	overlapped.hEvent = event
 
 	w.overlapped = overlapped
-	w.buf        = make([]u8, buf_size, allocator)
+	w.buf        = make([]u8, buf_size, w.allocator)
 	w.handle     = handle
 	w.event      = event
 	w.iocp       = iocp
@@ -133,7 +143,7 @@ native_dir_init :: proc (w: ^Native_Dir, path: string, allocator: mem.Allocator,
 	return .None
 }
 
-native_dir_destroy :: proc (w: Native_Dir, allocator: mem.Allocator) {
+native_destroy :: proc (w: $W) {
 	if w.iocp != nil {
 		windows.CloseHandle(w.iocp)
 		track_close(w, uintptr(w.iocp))
@@ -147,21 +157,12 @@ native_dir_destroy :: proc (w: Native_Dir, allocator: mem.Allocator) {
 		track_close(w, uintptr(w.handle))
 	}
 	if w.buf != nil {
-		delete(w.buf, allocator)
+		delete(w.buf, w.allocator)
 	}
 	if w.overlapped != nil {
-		free(w.overlapped, allocator)
+		free(w.overlapped, w.allocator)
 	}
-}
-
-backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
-	// Windows ReadDirectoryChangesW with bWatchSubtree=TRUE
-	// automatically tracks new/deleted subdirectories.
-	return .None
-}
-
-backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
-	iocp_drain(w, allocator, out)
+	track_end(w)
 }
 
 // === Shared IOCP read helpers ===
