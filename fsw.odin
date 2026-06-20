@@ -375,55 +375,52 @@ destroy :: proc {
 // === get_events ===
 
 // get_events_file returns all available events from a Watcher_File.
-// The returned [dynamic]Event is allocated with the watcher's allocator;
-// the caller must `delete` it when done.
+// The returned [dynamic]Event and the path strings inside are allocated
+// with `allocator` (defaults to context.allocator). The caller must
+// `delete` the returned array and each path string when done.
+// Pass context.temp_allocator if you don't plan to store the events.
 // For native backends, performs a non-blocking read of the OS notification queue.
-get_events_file :: proc(w: ^Watcher_File) -> [dynamic]Event {
-	events := make([dynamic]Event, 0, 16, w.allocator)
-	backend_file_get_events(w, &events)
+get_events_file :: proc(w: ^Watcher_File, allocator := context.allocator) -> [dynamic]Event {
+	events := make([dynamic]Event, 0, 16, allocator)
+	backend_file_get_events(w, allocator, &events)
 	return events
 }
 
 // get_events_dir returns all available events from a Watcher_Dir.
-get_events_dir :: proc(w: ^Watcher_Dir) -> []Event {
-	events := make([dynamic]Event, 0, 16, w.allocator)
-	backend_dir_get_events(w, &events)
-	return events[:]
+get_events_dir :: proc(w: ^Watcher_Dir, allocator := context.allocator) -> [dynamic]Event {
+	events := make([dynamic]Event, 0, 16, allocator)
+	backend_dir_get_events(w, allocator, &events)
+	return events
 }
 
 // get_events_rec returns all available events from a Watcher_Recursive.
-get_events_rec :: proc(w: ^Watcher_Recursive) -> []Event {
-	events := make([dynamic]Event, 0, 16, w.allocator)
-	backend_rec_get_events(w, &events)
-	return events[:]
+get_events_rec :: proc(w: ^Watcher_Recursive, allocator := context.allocator) -> [dynamic]Event {
+	events := make([dynamic]Event, 0, 16, allocator)
+	backend_rec_get_events(w, allocator, &events)
+	return events
 }
 
-// get_events_glob returns all available events from a Watcher_Glob.
-// Internally calls get_events on the embedded recursive watcher and filters
-// through the glob pattern.
-get_events_glob :: proc(w: ^Watcher_Glob) -> []Event {
-	return glob_get_events(w)[:]
-}
+get_events_glob :: glob_get_events
 
 // get_events_file_poll returns all available events from a Watcher_File_Poll.
-get_events_file_poll :: proc(w: ^Watcher_File_Poll) -> []Event {
-	events := make([dynamic]Event, 0, 4, w.allocator)
-	poll_file_get_events(w, &events)
-	return events[:]
+get_events_file_poll :: proc(w: ^Watcher_File_Poll, allocator := context.allocator) -> [dynamic]Event {
+	events := make([dynamic]Event, 0, 4, allocator)
+	poll_file_get_events(w, allocator, &events)
+	return events
 }
 
 // get_events_dir_poll returns all available events from a Watcher_Dir_Poll.
-get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll) -> []Event {
-	events := make([dynamic]Event, 0, 16, w.allocator)
-	poll_dir_get_events(w, &events)
-	return events[:]
+get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll, allocator := context.allocator) -> [dynamic]Event {
+	events := make([dynamic]Event, 0, 16, allocator)
+	poll_dir_get_events(w, allocator, &events)
+	return events
 }
 
 // get_events_rec_poll returns all available events from a Watcher_Recursive_Poll.
-get_events_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> []Event {
-	events := make([dynamic]Event, 0, 16, w.allocator)
-	poll_rec_get_events(w, &events)
-	return events[:]
+get_events_rec_poll :: proc(w: ^Watcher_Recursive_Poll, allocator := context.allocator) -> [dynamic]Event {
+	events := make([dynamic]Event, 0, 16, allocator)
+	poll_rec_get_events(w, allocator, &events)
+	return events
 }
 
 // get_events is a procedure group that accepts any watcher type.

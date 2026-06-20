@@ -72,8 +72,8 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	track_end(w)
 }
 
-backend_file_get_events :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
-	inotify_read(w.native.fd, w.native.wd, w.path, out, w.allocator)
+backend_file_get_events :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	inotify_read(w.native.fd, w.native.wd, w.path, out, allocator)
 }
 
 // === Watcher_Dir ===
@@ -106,8 +106,8 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	track_end(w)
 }
 
-backend_dir_get_events :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
-	inotify_read(w.native.fd, w.native.wd, w.path, out, w.allocator)
+backend_dir_get_events :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	inotify_read(w.native.fd, w.native.wd, w.path, out, allocator)
 }
 
 // === Watcher_Recursive ===
@@ -176,8 +176,8 @@ rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	}
 }
 
-backend_rec_get_events :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
-	inotify_read_rec(w, out)
+backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	inotify_read_rec(w, allocator, out)
 }
 
 // === Shared read helper ===
@@ -224,7 +224,7 @@ inotify_read :: proc(
 // all events to `out`. New subdirectories are auto-watched on .Added
 // events.
 @(private)
-inotify_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
+inotify_read_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	buf: [INOTIFY_BUF_SIZE]byte
 	for {
 		n, errno := linux.read(w.native.fd, buf[:])
@@ -241,9 +241,9 @@ inotify_read_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
 
 			dir_path := w.native.watches[event.wd] or_continue
 			if name := inotify_event_name(event); name != "" {
-				ev.path, _ = filepath.join({dir_path, name}, w.allocator)
+				ev.path, _ = filepath.join({dir_path, name}, allocator)
 			} else {
-				ev.path = strings.clone(dir_path, w.allocator)
+				ev.path = strings.clone(dir_path, allocator)
 			}
 
 			// Auto-watch new subdirs BEFORE emitting event to avoid race

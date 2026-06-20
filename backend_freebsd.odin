@@ -10,6 +10,7 @@
 
 package fsw
 
+import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -91,8 +92,8 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	track_end(w)
 }
 
-backend_file_get_events :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
-	kqueue_drain_file(w, out)
+backend_file_get_events :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	kqueue_drain_file(w, allocator, out)
 }
 
 // === Watcher_Dir ===
@@ -145,8 +146,8 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	track_end(w)
 }
 
-backend_dir_get_events :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
-	kqueue_drain_dir(w, out)
+backend_dir_get_events :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	kqueue_drain_dir(w, allocator, out)
 }
 
 // === Watcher_Recursive ===
@@ -249,14 +250,14 @@ freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	}
 }
 
-backend_rec_get_events :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
-	kqueue_drain_rec(w, out)
+backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	kqueue_drain_rec(w, allocator, out)
 }
 
 // === Shared kqueue read helpers ===
 
 @(private)
-kqueue_drain_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
+kqueue_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	for {
 		n, _ := kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
@@ -266,14 +267,14 @@ kqueue_drain_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
 			fflags := ev.fflags.vnode
 			if fflags != {} {
 				kind := kq_normalize(fflags)
-				append(out, Event{kind = kind, path = strings.clone(w.path, w.allocator)})
+				append(out, Event{kind = kind, path = strings.clone(w.path, allocator)})
 			}
 		}
 	}
 }
 
 @(private)
-kqueue_drain_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
+kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 
@@ -283,17 +284,17 @@ kqueue_drain_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
 
 	for name in old {
 		if _, ok := current[name]; !ok {
-			fullpath := filepath.join({w.path, name}, w.allocator) or_continue
+			fullpath := filepath.join({w.path, name}, allocator) or_continue
 			append(out, Event{kind = .Removed, path = fullpath})
 		}
 	}
 	for name, fi in current {
 		prev, ok := old[name]
 		if !ok {
-			fullpath := filepath.join({w.path, name}, w.allocator) or_continue
+			fullpath := filepath.join({w.path, name}, allocator) or_continue
 			append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
 		} else if fi.mtime != prev.mtime || fi.size != prev.size {
-			fullpath := filepath.join({w.path, name}, w.allocator) or_continue
+			fullpath := filepath.join({w.path, name}, allocator) or_continue
 			append(out, Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir})
 		}
 	}
@@ -304,7 +305,7 @@ kqueue_drain_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
 }
 
 @(private)
-kqueue_drain_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
+kqueue_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [64]kqueue.KEvent
 	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
 
@@ -314,7 +315,7 @@ kqueue_drain_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
 
 		for name in dir_prev {
 			if _, ok := current[name]; !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, w.allocator)
+				fullpath, join_err := filepath.join({dir_path, name}, allocator)
 				if join_err != nil { continue }
 				append(out, Event{kind = .Removed, path = fullpath})
 			}
@@ -322,14 +323,14 @@ kqueue_drain_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
 		for name, fi in current {
 			prev_fi, ok := dir_prev[name]
 			if !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, w.allocator)
+				fullpath, join_err := filepath.join({dir_path, name}, allocator)
 				if join_err != nil { continue }
 				if fi.is_dir {
 					freebsd_rec_add_watch(w, fullpath)
 				}
 				append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
 			} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
-				fullpath, join_err := filepath.join({dir_path, name}, w.allocator)
+				fullpath, join_err := filepath.join({dir_path, name}, allocator)
 				if join_err != nil { continue }
 				append(out, Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir})
 			}

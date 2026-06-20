@@ -133,8 +133,8 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	track_end(w)
 }
 
-backend_file_get_events :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
-	iocp_drain_file(w, out)
+backend_file_get_events :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	iocp_drain_file(w, allocator, out)
 }
 
 // === Watcher_Dir ===
@@ -212,8 +212,8 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	track_end(w)
 }
 
-backend_dir_get_events :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
-	iocp_drain_dir(w, out)
+backend_dir_get_events :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	iocp_drain_dir(w, allocator, out)
 }
 
 // === Watcher_Recursive ===
@@ -302,14 +302,14 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 	return .None
 }
 
-backend_rec_get_events :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
-	iocp_drain_rec(w, out)
+backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	iocp_drain_rec(w, allocator, out)
 }
 
 // === Shared IOCP read helpers ===
 
 @(private)
-iocp_drain_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
+iocp_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
 	event      := w.native.event
@@ -328,7 +328,7 @@ iocp_drain_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
 			for {
 				e: Event
 				matched: bool
-				e, matched = process_file_entry(entry, w, w.allocator)
+				e, matched = process_file_entry(entry, w, allocator)
 				if matched do append(out, e)
 				if entry.next_entry_offset == 0 do break
 				entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
@@ -341,7 +341,7 @@ iocp_drain_file :: proc(w: ^Watcher_File, out: ^[dynamic]Event) {
 }
 
 @(private)
-iocp_drain_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
+iocp_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
 	event      := w.native.event
@@ -360,7 +360,7 @@ iocp_drain_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
 			for {
 				e: Event
 				matched: bool
-				e, matched = process_dir_entry(entry, w, w.allocator)
+				e, matched = process_dir_entry(entry, w, allocator)
 				if matched do append(out, e)
 				if entry.next_entry_offset == 0 do break
 				entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
@@ -373,7 +373,7 @@ iocp_drain_dir :: proc(w: ^Watcher_Dir, out: ^[dynamic]Event) {
 }
 
 @(private)
-iocp_drain_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
+iocp_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
 	event      := w.native.event
@@ -392,7 +392,7 @@ iocp_drain_rec :: proc(w: ^Watcher_Recursive, out: ^[dynamic]Event) {
 			for {
 				e: Event
 				matched: bool
-				e, matched = process_rec_entry(entry, w, w.allocator)
+				e, matched = process_rec_entry(entry, w, allocator)
 				if matched do append(out, e)
 				if entry.next_entry_offset == 0 do break
 				entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))

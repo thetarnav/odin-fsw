@@ -84,22 +84,23 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 
 // glob_get_events pulls events from the inner recursive watcher and applies
 // the glob filter. Non-matching events are consumed and discarded; matching
-// events are cloned and returned. The returned [dynamic]Event must be
-// `delete`d by the caller.
-glob_get_events :: proc(w: ^Watcher_Glob) -> [dynamic]Event {
-	inner_events := get_events(&w.inner)
+// events are cloned and returned. The returned [dynamic]Event and its path
+// strings are allocated with `allocator`. The caller must `delete` the
+// backing array and each path string when done.
+glob_get_events :: proc(w: ^Watcher_Glob, allocator := context.allocator) -> [dynamic]Event {
+	inner_events := get_events(&w.inner, allocator)
 	defer {
 		for e in inner_events {
-			delete(e.path, w.allocator)
+			delete(e.path, allocator)
 		}
 		delete(inner_events)
 	}
 
-	out := make([dynamic]Event, 0, len(inner_events), w.allocator)
+	out := make([dynamic]Event, 0, len(inner_events), allocator)
 	for &e in inner_events {
 		key_path, matched := glob_filter_event(w, &e)
 		if matched {
-			append(&out, Event{kind = e.kind, path = strings.clone(key_path, w.allocator), is_dir = e.is_dir})
+			append(&out, Event{kind = e.kind, path = strings.clone(key_path, allocator), is_dir = e.is_dir})
 		}
 	}
 	return out
