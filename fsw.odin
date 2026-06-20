@@ -9,7 +9,7 @@
 //
 // Constructors: `watch_file`, `watch_dir`, `watch_dir_recursive`,
 // `watch_file_poll`, `watch_dir_poll`, `watch_dir_poll_recursive`,
-// `watch_glob`. They return `Watcher_*` (by value) and an `Error`.
+// `watch_glob`. They return `Watcher_*` and an `Error`.
 //
 // Usage:
 //   w, err := watch_dir("/tmp")
@@ -130,8 +130,6 @@ Watcher :: union {
 	Watcher_Recursive_Poll,
 	Watcher_Glob,
 }
-
-// === Constructors — return stack-allocated values ===
 
 // watch_file creates a native watcher for a single file.
 // Initializes OS handles. Does NOT start a thread.
@@ -311,24 +309,20 @@ watch_glob :: proc (pattern: string, allocator := context.allocator) -> (Watcher
 
 // destroy_file stops and frees a Watcher_File.
 destroy_file :: proc (w: Watcher_File) {
-	local := w
-	backend_file_destroy(&local)
-	delete(local.path, local.allocator)
+	backend_file_destroy(w)
+	delete(w.path, w.allocator)
 }
 
 // destroy_dir stops and frees a Watcher_Dir.
 destroy_dir :: proc (w: Watcher_Dir) {
-	local := w
-	backend_dir_destroy(&local)
-	delete(local.path, local.allocator)
+	backend_dir_destroy(w)
+	delete(w.path, w.allocator)
 }
 
 // destroy_rec stops and frees a Watcher_Recursive.
 destroy_rec :: proc (w: Watcher_Recursive) {
-	local := w
-	backend_rec_destroy(&local)
-	backend_rec_native_cleanup(&local)
-	delete(local.path, local.allocator)
+	backend_rec_destroy(w)
+	delete(w.path, w.allocator)
 }
 
 // destroy_file_poll stops and frees a Watcher_File_Poll.
@@ -356,14 +350,12 @@ destroy_rec_poll :: proc (w: Watcher_Recursive_Poll) {
 
 // destroy_glob stops and frees a Watcher_Glob and its embedded recursive watcher.
 destroy_glob :: proc (w: Watcher_Glob) {
-	local := w
-	backend_rec_destroy(&local.inner)
-	backend_rec_native_cleanup(&local.inner)
-	delete(local.inner.path, local.allocator)
-	for path in local.matched_files {
-		delete(path, local.allocator)
+	backend_rec_destroy(w.inner)
+	delete(w.inner.path, w.allocator)
+	for path in w.matched_files {
+		delete(path, w.allocator)
 	}
-	delete(local.matched_files)
+	delete(w.matched_files)
 }
 
 // destroy is a procedure group that accepts any watcher type.

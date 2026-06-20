@@ -13,13 +13,13 @@ The user drives the event loop by calling `get_events` on a watcher.
 ```odin
 import fsw "odin-fsw"
 
-// Create a native watcher for a directory.
+// Create a native watcher for a directory
 w, err := fsw.watch_dir("/tmp")
 assert(err == nil)
 defer fsw.destroy(w)
 
 // User-driven event loop. Each get_events call drains the OS queue
-// and returns a fresh dynamic array of events.
+// and returns a fresh dynamic array of events
 for {
     events := fsw.get_events(&w)
     defer fsw.delete_events(events)
@@ -28,7 +28,7 @@ for {
         fmt.printfln("%v: %s", event.kind, event.path)
     }
 
-    // sleep if you want to avoid a tight loop.
+    // sleep if you want to avoid a tight loop
     time.sleep(100 * time.Millisecond)
 }
 ```
@@ -59,7 +59,7 @@ delete(events)
 ## Constructors
 
 All constructors return a stack-allocated value by default.\
-Call `destroy(w)` when done — `destroy` takes the watcher by value and frees its resources.
+Call `destroy(w)` when done.
 
 | Constructor | Type | Backend |
 |---|---|---|
@@ -75,7 +75,7 @@ All constructors accept an optional `allocator` parameter (defaults to `context.
 
 `get_events(&w)` and `rescan(&w)` take a pointer to the watcher — they read and update
 internal state (the `prev` map for poll watchers, the inotify/kqueue watch set for
-recursive watchers, etc.). `destroy(w)` takes the watcher by value.
+recursive watchers, etc.).
 
 If you need to store a watcher opaquely without committing to a specific kind,
 use the `Watcher` tagged union — `destroy`, `get_events`,

@@ -38,10 +38,8 @@ Native_Recursive :: struct {
 
 @require_results
 kq_normalize :: proc (fflags: kqueue.VNode_Flags) -> Event_Kind {
-	if .Delete in fflags || .Revoke in fflags { return .Removed }
-	if .Rename in fflags { return .Renamed }
-	if .Write in fflags || .Extend in fflags { return .Modified }
-	if .Attrib in fflags || .Link in fflags { return .Modified }
+	if .Delete in fflags || .Revoke in fflags do return .Removed
+	if .Rename in fflags do return .Renamed
 	return .Modified
 }
 
@@ -87,7 +85,7 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	return .None
 }
 
-backend_file_destroy :: proc (w: ^Watcher_File) {
+backend_file_destroy :: proc (w: Watcher_File) {
 	posix.close(w.kq)
 	track_close(w, w.kq)
 	os.close(w.file)
@@ -139,7 +137,7 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 	return .None
 }
 
-backend_dir_destroy :: proc (w: ^Watcher_Dir) {
+backend_dir_destroy :: proc (w: Watcher_Dir) {
 	posix.close(w.kq)
 	track_close(w, w.kq)
 	os.close(w.file)
@@ -172,18 +170,12 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 	return .None
 }
 
-backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
+backend_rec_destroy :: proc (w: Watcher_Recursive) {
 	posix.close(w.kq)
 	track_close(w, w.kq)
-	for fd_key in w.watches {
+	for fd_key, v in w.watches {
 		posix.close(posix.FD(fd_key))
 		track_close(w, fd_key)
-	}
-	track_end(w)
-}
-
-backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
-	for _, v in w.watches {
 		delete(v, w.allocator)
 	}
 	delete(w.watches)
@@ -194,6 +186,7 @@ backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
 		delete(inner)
 	}
 	delete(w.prev)
+	track_end(w)
 }
 
 backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {

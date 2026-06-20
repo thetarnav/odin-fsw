@@ -91,7 +91,7 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	return .None
 }
 
-backend_file_destroy :: proc (w: ^Watcher_File) {
+backend_file_destroy :: proc (w: Watcher_File) {
 	if w.iocp != nil {
 		windows.CloseHandle(w.iocp)
 		track_close(w, uintptr(w.iocp))
@@ -162,7 +162,7 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 	return .None
 }
 
-backend_dir_destroy :: proc (w: ^Watcher_Dir) {
+backend_dir_destroy :: proc (w: Watcher_Dir) {
 	if w.iocp != nil {
 		windows.CloseHandle(w.iocp)
 		track_close(w, uintptr(w.iocp))
@@ -233,7 +233,7 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> (err: Error) {
 	return .None
 }
 
-backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
+backend_rec_destroy :: proc (w: Watcher_Recursive) {
 	if w.iocp != nil {
 		windows.CloseHandle(w.iocp)
 		track_close(w, uintptr(w.iocp))
@@ -250,11 +250,6 @@ backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
 		delete(w.buf, w.allocator)
 	}
 	track_end(w)
-}
-
-backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
-	// Windows uses ReadDirectoryChangesW with bWatchSubtree=TRUE, so
-	// there's no per-subdirectory state to clean up.
 }
 
 backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
