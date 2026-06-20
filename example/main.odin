@@ -16,7 +16,7 @@ import "core:time"
 
 import fsw ".."
 
-main :: proc() {
+main :: proc () {
 	args := os.args[1:]
 	if len(args) < 1 {
 		fmt.panicf("usage: fsw_demo <glob-pattern> [poll-interval-ms]\n")

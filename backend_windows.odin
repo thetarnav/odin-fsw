@@ -54,7 +54,7 @@ Native_Recursive :: struct {
 
 // === Watcher_File ===
 
-backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
+backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 
 	track_start(w)
 
@@ -112,7 +112,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
 	return .None
 }
 
-backend_file_destroy :: proc(w: ^Watcher_File) {
+backend_file_destroy :: proc (w: ^Watcher_File) {
 	if w.native.iocp != nil {
 		windows.CloseHandle(w.native.iocp)
 		track_close(w, uintptr(w.native.iocp))
@@ -134,13 +134,13 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	track_end(w)
 }
 
-backend_file_get_events :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_file_get_events :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	iocp_drain_file(w, allocator, out)
 }
 
 // === Watcher_Dir ===
 
-backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
+backend_dir_init :: proc (w: ^Watcher_Dir) -> Error {
 
 	track_start(w)
 
@@ -191,7 +191,7 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
 	return .None
 }
 
-backend_dir_destroy :: proc(w: ^Watcher_Dir) {
+backend_dir_destroy :: proc (w: ^Watcher_Dir) {
 	if w.native.iocp != nil {
 		windows.CloseHandle(w.native.iocp)
 		track_close(w, int(uintptr(w.native.iocp)))
@@ -213,13 +213,13 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	track_end(w)
 }
 
-backend_dir_get_events :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_dir_get_events :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	iocp_drain_dir(w, allocator, out)
 }
 
 // === Watcher_Recursive ===
 
-backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
+backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 
 	track_start(w)
 
@@ -270,7 +270,7 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	return .None
 }
 
-backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
+backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
 	if w.native.iocp != nil {
 		windows.CloseHandle(w.native.iocp)
 		track_close(w, int(uintptr(w.native.iocp)))
@@ -292,24 +292,24 @@ backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 	track_end(w)
 }
 
-backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
+backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
 	// Windows uses ReadDirectoryChangesW with bWatchSubtree=TRUE, so
 	// there's no per-subdirectory state to clean up.
 }
 
-backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
+backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
 	// Windows ReadDirectoryChangesW with bWatchSubtree=TRUE
 	// automatically tracks new/deleted subdirectories.
 	return .None
 }
 
-backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	iocp_drain_rec(w, allocator, out)
 }
 
 // === Shared IOCP read helpers ===
 
-iocp_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+iocp_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
 	event      := w.native.event
@@ -340,7 +340,7 @@ iocp_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynam
 	}
 }
 
-iocp_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+iocp_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
 	event      := w.native.event
@@ -371,7 +371,7 @@ iocp_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic
 	}
 }
 
-iocp_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+iocp_drain_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	handle     := w.native.handle
 	iocp       := w.native.iocp
 	event      := w.native.event
@@ -403,7 +403,7 @@ iocp_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[d
 }
 
 @require_results
-process_file_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_File, allocator: mem.Allocator) -> (Event, bool) {
+process_file_entry :: proc (entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_File, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
 	if name == w.native.target {
 		kind := action_normalize(entry.action)
@@ -413,7 +413,7 @@ process_file_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_
 }
 
 @require_results
-process_dir_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_Dir, allocator: mem.Allocator) -> (Event, bool) {
+process_dir_entry :: proc (entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_Dir, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
 	fullpath, _ := filepath.join({w.path, name}, allocator)
 	return Event{
@@ -424,7 +424,7 @@ process_dir_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_D
 }
 
 @require_results
-process_rec_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_Recursive, allocator: mem.Allocator) -> (Event, bool) {
+process_rec_entry :: proc (entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_Recursive, allocator: mem.Allocator) -> (Event, bool) {
 	name := fni_name(entry)
 	fullpath, _ := filepath.join({w.path, name}, allocator)
 	return Event{
@@ -435,7 +435,7 @@ process_rec_entry :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION, w: ^Watcher_R
 }
 
 @require_results
-action_normalize :: proc(action: u32) -> Event_Kind {
+action_normalize :: proc (action: u32) -> Event_Kind {
 	switch action {
 	case 1: return .Added       // FILE_ACTION_ADDED
 	case 2: return .Removed     // FILE_ACTION_REMOVED
@@ -447,7 +447,7 @@ action_normalize :: proc(action: u32) -> Event_Kind {
 }
 
 @require_results
-fni_name :: proc(entry: ^windows.FILE_NOTIFY_INFORMATION) -> string {
+fni_name :: proc (entry: ^windows.FILE_NOTIFY_INFORMATION) -> string {
 	if entry.file_name_length == 0 do return ""
 	name_u16 := ([^]u16)(&entry.file_name[0])
 	name_len := int(entry.file_name_length) / 2

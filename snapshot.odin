@@ -30,7 +30,7 @@ File_Info :: struct {
 // file_stat_alloc stats a path using the provided allocator. The caller is
 // responsible for freeing the returned os.File_Info via os.file_info_delete.
 @require_results
-file_stat_alloc :: proc(path: string, allocator: mem.Allocator) -> (os.File_Info, Error) {
+file_stat_alloc :: proc (path: string, allocator: mem.Allocator) -> (os.File_Info, Error) {
 	info, e := os.stat(path, allocator)
 	if e != nil {
 		return {}, .Invalid_Path
@@ -45,7 +45,7 @@ file_stat_alloc :: proc(path: string, allocator: mem.Allocator) -> (os.File_Info
 // recursive=true visits all nested directories.
 //
 // fullpath=false populates a map keyed by entry name (not full path)
-snapshot_dir_alloc :: proc(dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator, fullpath: bool, recursive: bool) {
+snapshot_dir_alloc :: proc (dir: string, prev: ^map[string]File_Info, allocator: mem.Allocator, fullpath: bool, recursive: bool) {
 
 	entries, _ := os.read_all_directory_by_path(dir, context.temp_allocator)
 	for entry in entries {

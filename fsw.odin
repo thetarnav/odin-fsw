@@ -137,7 +137,7 @@ Watcher :: union {
 // Initializes OS handles. Does NOT start a thread.
 // Call destroy(w) when done.
 @require_results
-watch_file :: proc(path: string, allocator := context.allocator) -> (^Watcher_File, Error) {
+watch_file :: proc (path: string, allocator := context.allocator) -> (^Watcher_File, Error) {
 
 	p, err := filepath.abs(path, allocator)
 	if err != nil do return nil, .Invalid_Path
@@ -164,7 +164,7 @@ watch_file :: proc(path: string, allocator := context.allocator) -> (^Watcher_Fi
 // Initializes OS handles. Does NOT start a thread.
 // Only events in the immediate directory are reported.
 @require_results
-watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir, Error) {
+watch_dir :: proc (path: string, allocator := context.allocator) -> (^Watcher_Dir, Error) {
 
 	p, err := filepath.abs(path, allocator)
 	if err != nil do return nil, .Invalid_Path
@@ -192,7 +192,7 @@ watch_dir :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir
 // Subdirectories created after init are auto-watched when the kernel reports an
 // .Added event for them (on the first get_events call that processes the event).
 @require_results
-watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
+watch_dir_recursive :: proc (path: string, allocator := context.allocator) -> (^Watcher_Recursive, Error) {
 
 	p, err := filepath.abs(path, allocator)
 	if err != nil do return nil, .Invalid_Path
@@ -219,7 +219,7 @@ watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^W
 // No thread is started. The user drives polling by calling get_events.
 // Each call performs a single stat() check.
 @require_results
-watch_file_poll :: proc(path: string, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
+watch_file_poll :: proc (path: string, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
 
 	p, err := filepath.abs(path, allocator)
 	if err != nil do return nil, .Invalid_Path
@@ -250,7 +250,7 @@ watch_file_poll :: proc(path: string, allocator := context.allocator) -> (^Watch
 // No thread is started. Each get_events call performs a single
 // snapshot diff.
 @require_results
-watch_dir_poll :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
+watch_dir_poll :: proc (path: string, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
 
 	p, err := filepath.abs(path, allocator)
 	if err != nil do return nil, .Invalid_Path
@@ -274,7 +274,7 @@ watch_dir_poll :: proc(path: string, allocator := context.allocator) -> (^Watche
 // No thread is started. Each get_events call performs a single
 // recursive snapshot diff.
 @require_results
-watch_dir_poll_recursive :: proc(path: string, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error) {
+watch_dir_poll_recursive :: proc (path: string, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
@@ -296,7 +296,7 @@ watch_dir_poll_recursive :: proc(path: string, allocator := context.allocator) -
 // The directory is watched recursively; only files matching the pattern trigger events.
 // No thread is started. Performs an initial scan to detect pre-existing matching files.
 @require_results
-watch_glob :: proc(pattern: string, allocator := context.allocator) -> (^Watcher_Glob, Error) {
+watch_glob :: proc (pattern: string, allocator := context.allocator) -> (^Watcher_Glob, Error) {
 
 	root, pat := glob_extract_root(pattern)
 	p, err := filepath.abs(root, allocator)
@@ -332,7 +332,7 @@ watch_glob :: proc(pattern: string, allocator := context.allocator) -> (^Watcher
 // === destroy ===
 
 // destroy_file stops and frees a Watcher_File. Safe to call with nil.
-destroy_file :: proc(w: ^Watcher_File) {
+destroy_file :: proc (w: ^Watcher_File) {
 	if w == nil do return
 	backend_file_destroy(w)
 	delete(w.path, w.allocator)
@@ -340,7 +340,7 @@ destroy_file :: proc(w: ^Watcher_File) {
 }
 
 // destroy_dir stops and frees a Watcher_Dir. Safe to call with nil.
-destroy_dir :: proc(w: ^Watcher_Dir) {
+destroy_dir :: proc (w: ^Watcher_Dir) {
 	if w == nil do return
 	backend_dir_destroy(w)
 	delete(w.path, w.allocator)
@@ -348,7 +348,7 @@ destroy_dir :: proc(w: ^Watcher_Dir) {
 }
 
 // destroy_rec stops and frees a Watcher_Recursive. Safe to call with nil.
-destroy_rec :: proc(w: ^Watcher_Recursive) {
+destroy_rec :: proc (w: ^Watcher_Recursive) {
 	if w == nil do return
 	backend_rec_destroy(w)
 	backend_rec_native_cleanup(w)
@@ -357,14 +357,14 @@ destroy_rec :: proc(w: ^Watcher_Recursive) {
 }
 
 // destroy_file_poll stops and frees a Watcher_File_Poll. Safe to call with nil.
-destroy_file_poll :: proc(w: ^Watcher_File_Poll) {
+destroy_file_poll :: proc (w: ^Watcher_File_Poll) {
 	if w == nil do return
 	delete(w.path, w.allocator)
 	free(w, w.allocator)
 }
 
 // destroy_dir_poll stops and frees a Watcher_Dir_Poll. Safe to call with nil.
-destroy_dir_poll :: proc(w: ^Watcher_Dir_Poll) {
+destroy_dir_poll :: proc (w: ^Watcher_Dir_Poll) {
 	if w == nil do return
 	for path in w.prev {
 		delete(path, w.allocator)
@@ -375,7 +375,7 @@ destroy_dir_poll :: proc(w: ^Watcher_Dir_Poll) {
 }
 
 // destroy_rec_poll stops and frees a Watcher_Recursive_Poll. Safe to call with nil.
-destroy_rec_poll :: proc(w: ^Watcher_Recursive_Poll) {
+destroy_rec_poll :: proc (w: ^Watcher_Recursive_Poll) {
 	if w == nil do return
 	for path in w.prev {
 		delete(path, w.allocator)
@@ -386,7 +386,7 @@ destroy_rec_poll :: proc(w: ^Watcher_Recursive_Poll) {
 }
 
 // destroy_glob stops and frees a Watcher_Glob and its embedded recursive watcher. Safe to call with nil.
-destroy_glob :: proc(w: ^Watcher_Glob) {
+destroy_glob :: proc (w: ^Watcher_Glob) {
 	if w == nil do return
 	backend_rec_destroy(&w.inner)
 	backend_rec_native_cleanup(&w.inner)
@@ -412,7 +412,7 @@ destroy :: proc {
 }
 
 // destroy_watcher frees a Watcher union, dispatching to the correct destroy_*.
-destroy_watcher :: proc(w: Watcher) {
+destroy_watcher :: proc (w: Watcher) {
 	switch v in w {
 	case ^Watcher_File:           destroy(v)
 	case ^Watcher_Dir:            destroy(v)
@@ -432,7 +432,7 @@ destroy_watcher :: proc(w: Watcher) {
 // Pass context.temp_allocator if you don't plan to store the events.
 // For native backends, performs a non-blocking read of the OS notification queue.
 @require_results
-get_events_file :: proc(w: ^Watcher_File, allocator := context.allocator) -> []Event {
+get_events_file :: proc (w: ^Watcher_File, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	backend_file_get_events(w, allocator, &events)
 	shrink(&events)
@@ -442,7 +442,7 @@ get_events_file :: proc(w: ^Watcher_File, allocator := context.allocator) -> []E
 // get_events_dir returns all available events from a Watcher_Dir.
 // For native backends, performs a non-blocking read of the OS notification queue.
 @require_results
-get_events_dir :: proc(w: ^Watcher_Dir, allocator := context.allocator) -> []Event {
+get_events_dir :: proc (w: ^Watcher_Dir, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	backend_dir_get_events(w, allocator, &events)
 	shrink(&events)
@@ -452,7 +452,7 @@ get_events_dir :: proc(w: ^Watcher_Dir, allocator := context.allocator) -> []Eve
 // get_events_rec returns all available events from a Watcher_Recursive.
 // For native backends, performs a non-blocking read of the OS notification queue.
 @require_results
-get_events_rec :: proc(w: ^Watcher_Recursive, allocator := context.allocator) -> []Event {
+get_events_rec :: proc (w: ^Watcher_Recursive, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	backend_rec_get_events(w, allocator, &events)
 	shrink(&events)
@@ -463,7 +463,7 @@ get_events_glob :: glob_get_events
 
 // get_events_file_poll returns all available events from a Watcher_File_Poll.
 @require_results
-get_events_file_poll :: proc(w: ^Watcher_File_Poll, allocator := context.allocator) -> []Event {
+get_events_file_poll :: proc (w: ^Watcher_File_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 4, allocator)
 	poll_file_get_events(w, allocator, &events)
 	shrink(&events)
@@ -472,7 +472,7 @@ get_events_file_poll :: proc(w: ^Watcher_File_Poll, allocator := context.allocat
 
 // get_events_dir_poll returns all available events from a Watcher_Dir_Poll.
 @require_results
-get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll, allocator := context.allocator) -> []Event {
+get_events_dir_poll :: proc (w: ^Watcher_Dir_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	poll_dir_get_events(w, allocator, &events)
 	shrink(&events)
@@ -481,7 +481,7 @@ get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll, allocator := context.allocator
 
 // get_events_rec_poll returns all available events from a Watcher_Recursive_Poll.
 @require_results
-get_events_rec_poll :: proc(w: ^Watcher_Recursive_Poll, allocator := context.allocator) -> []Event {
+get_events_rec_poll :: proc (w: ^Watcher_Recursive_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
 	poll_rec_get_events(w, allocator, &events)
 	shrink(&events)
@@ -504,7 +504,7 @@ get_events :: proc {
 
 // get_events_watcher returns events from a Watcher union, dispatching to the correct get_events_*.
 @require_results
-get_events_watcher :: proc(w: Watcher, allocator := context.allocator) -> []Event {
+get_events_watcher :: proc (w: Watcher, allocator := context.allocator) -> []Event {
 	switch v in w {
 	case ^Watcher_File:           return get_events(v, allocator)
 	case ^Watcher_Dir:            return get_events(v, allocator)
@@ -538,7 +538,7 @@ delete_events :: proc (events: []Event, allocator := context.allocator, loc := #
 rescan_rec :: backend_rec_rescan
 
 // rescan_rec_poll forces a full rescan of a polling recursive watcher, rebuilding the snapshot.
-rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error {
+rescan_rec_poll :: proc (w: ^Watcher_Recursive_Poll) -> Error {
 	delete(w.prev)
 	w.prev = make(map[string]File_Info, w.allocator)
 	snapshot_dir_alloc(w.path, &w.prev, w.allocator, fullpath=true, recursive=true)
@@ -546,7 +546,7 @@ rescan_rec_poll :: proc(w: ^Watcher_Recursive_Poll) -> Error {
 }
 
 // rescan_glob forces a full rescan of a glob watcher, re-registering watches and re-matching files.
-rescan_glob :: proc(w: ^Watcher_Glob) -> (err: Error) {
+rescan_glob :: proc (w: ^Watcher_Glob) -> (err: Error) {
 	rescan_rec(&w.inner) or_return
 	glob_rescan(w)
 	return .None
@@ -564,7 +564,7 @@ rescan :: proc {
 
 // rescan_watcher forces a rescan of a Watcher union, dispatching to the correct rescan_*.
 @require_results
-rescan_watcher :: proc(w: Watcher) -> Error {
+rescan_watcher :: proc (w: Watcher) -> Error {
 	#partial switch v in w {
 	case ^Watcher_Recursive:      return rescan(v)
 	case ^Watcher_Recursive_Poll: return rescan(v)

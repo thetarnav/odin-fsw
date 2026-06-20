@@ -37,7 +37,7 @@ Native_Recursive :: struct {
 }
 
 @require_results
-kq_normalize :: proc(fflags: kqueue.VNode_Flags) -> Event_Kind {
+kq_normalize :: proc (fflags: kqueue.VNode_Flags) -> Event_Kind {
 	if .Delete in fflags || .Revoke in fflags { return .Removed }
 	if .Rename in fflags { return .Renamed }
 	if .Write in fflags || .Extend in fflags { return .Modified }
@@ -52,7 +52,7 @@ no_wait: posix.timespec
 
 // === Watcher_File ===
 
-backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
+backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 
 	track_start(w)
 
@@ -87,7 +87,7 @@ backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
 	return .None
 }
 
-backend_file_destroy :: proc(w: ^Watcher_File) {
+backend_file_destroy :: proc (w: ^Watcher_File) {
 	posix.close(w.native.kq)
 	track_close(w, w.native.kq)
 	os.close(w.native.file)
@@ -95,13 +95,13 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	track_end(w)
 }
 
-backend_file_get_events :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_file_get_events :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	kqueue_drain_file(w, allocator, out)
 }
 
 // === Watcher_Dir ===
 
-backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
+backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 
 	track_start(w)
 
@@ -139,7 +139,7 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
 	return .None
 }
 
-backend_dir_destroy :: proc(w: ^Watcher_Dir) {
+backend_dir_destroy :: proc (w: ^Watcher_Dir) {
 	posix.close(w.native.kq)
 	track_close(w, w.native.kq)
 	os.close(w.native.file)
@@ -149,13 +149,13 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	track_end(w)
 }
 
-backend_dir_get_events :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_dir_get_events :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	kqueue_drain_dir(w, allocator, out)
 }
 
 // === Watcher_Recursive ===
 
-backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
+backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 
 	track_start(w)
 
@@ -172,7 +172,7 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	return .None
 }
 
-backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
+backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
 	posix.close(w.native.kq)
 	track_close(w, w.native.kq)
 	for fd_key in w.native.watches {
@@ -182,7 +182,7 @@ backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 	track_end(w)
 }
 
-backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
+backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
 	for _, v in w.native.watches {
 		delete(v, w.allocator)
 	}
@@ -196,7 +196,7 @@ backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
 	delete(w.native.prev)
 }
 
-backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
+backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
 	for fd_key in w.native.watches {
 		posix.close(posix.FD(fd_key))
 		track_close(w, fd_key)
@@ -212,7 +212,7 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 	return .None
 }
 
-kqueue_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
+kqueue_rec_add_watch :: proc (w: ^Watcher_Recursive, dir: string) {
 
 	cs, cs_err := strings.clone_to_cstring(dir, context.temp_allocator)
 	if cs_err != nil do return
@@ -257,13 +257,13 @@ kqueue_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	}
 }
 
-backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	kqueue_drain_rec(w, allocator, out)
 }
 
 // === Shared kqueue read helpers ===
 
-kqueue_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	for {
 		n, _ := kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
@@ -279,7 +279,7 @@ kqueue_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dyn
 	}
 }
 
-kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+kqueue_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
 
@@ -309,7 +309,7 @@ kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynam
 	w.native.prev = current
 }
 
-kqueue_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+kqueue_drain_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [64]kqueue.KEvent
 	kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
 

@@ -42,7 +42,7 @@ Native_Recursive :: struct {
 
 // === Watcher_File ===
 
-backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
+backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 
 	track_start(w)
 
@@ -64,19 +64,19 @@ backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
 	return .None
 }
 
-backend_file_destroy :: proc(w: ^Watcher_File) {
+backend_file_destroy :: proc (w: ^Watcher_File) {
 	linux.close(w.native.fd)
 	track_close(w, w.native.fd)
 	track_end(w)
 }
 
-backend_file_get_events :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_file_get_events :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	inotify_read(w.native.fd, w.native.wd, w.path, out, allocator)
 }
 
 // === Watcher_Dir ===
 
-backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
+backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 
 	track_start(w)
 
@@ -98,19 +98,19 @@ backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
 	return .None
 }
 
-backend_dir_destroy :: proc(w: ^Watcher_Dir) {
+backend_dir_destroy :: proc (w: ^Watcher_Dir) {
 	linux.close(w.native.fd)
 	track_close(w, w.native.fd)
 	track_end(w)
 }
 
-backend_dir_get_events :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_dir_get_events :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	inotify_read(w.native.fd, w.native.wd, w.path, out, allocator)
 }
 
 // === Watcher_Recursive ===
 
-backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
+backend_rec_init :: proc (w: ^Watcher_Recursive) -> Error {
 
 	track_start(w)
 
@@ -126,7 +126,7 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	return .None
 }
 
-backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
+backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
 	for wd_key in w.native.watches {
 		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
 	}
@@ -135,14 +135,14 @@ backend_rec_destroy :: proc(w: ^Watcher_Recursive) {
 	track_end(w)
 }
 
-backend_rec_native_cleanup :: proc(w: ^Watcher_Recursive) {
+backend_rec_native_cleanup :: proc (w: ^Watcher_Recursive) {
 	for _, v in w.native.watches {
 		delete(v, w.allocator)
 	}
 	delete(w.native.watches)
 }
 
-backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
+backend_rec_rescan :: proc (w: ^Watcher_Recursive) -> Error {
 	for wd_key in w.native.watches {
 		linux.inotify_rm_watch(w.native.fd, linux.Wd(wd_key))
 	}
@@ -154,7 +154,7 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 	return .None
 }
 
-rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
+rec_add_watch :: proc (w: ^Watcher_Recursive, dir: string) {
 
 	cs, _ := strings.clone_to_cstring(dir, context.temp_allocator)
 	wd, errno := linux.inotify_add_watch(w.native.fd, cs, INOTIFY_MASK)
@@ -174,7 +174,7 @@ rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 	}
 }
 
-backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	inotify_read_rec(w, allocator, out)
 }
 
@@ -183,7 +183,7 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, 
 // inotify_read repeatedly reads the inotify fd until EAGAIN, appending all
 // events matching `target_wd` to `out`. Events not matching are consumed
 // from the kernel buffer and discarded.
-inotify_read :: proc(
+inotify_read :: proc (
 	fd: linux.Fd,
 	target_wd: linux.Wd,
 	parent_path: string,
@@ -220,7 +220,7 @@ inotify_read :: proc(
 // inotify_read_rec reads from a recursive watcher's inotify fd, appending
 // all events to `out`. New subdirectories are auto-watched on .Added
 // events.
-inotify_read_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+inotify_read_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	buf: [INOTIFY_BUF_SIZE]byte
 	for {
 		n, errno := linux.read(w.native.fd, buf[:])
@@ -265,7 +265,7 @@ inotify_read_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^
 // === Event helpers ===
 
 @require_results
-inotify_normalize :: proc(mask: linux.Inotify_Event_Mask) -> Event_Kind {
+inotify_normalize :: proc (mask: linux.Inotify_Event_Mask) -> Event_Kind {
 	if .DELETE in mask || .DELETE_SELF in mask || .MOVED_FROM in mask {
 		return .Removed
 	}
@@ -279,7 +279,7 @@ inotify_normalize :: proc(mask: linux.Inotify_Event_Mask) -> Event_Kind {
 }
 
 @require_results
-inotify_event_name :: proc(event: ^linux.Inotify_Event) -> string {
+inotify_event_name :: proc (event: ^linux.Inotify_Event) -> string {
 	if event.len == 0 do return ""
 	return string(cstring(cast([^]u8)&event.name))
 }

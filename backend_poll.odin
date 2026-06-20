@@ -23,7 +23,7 @@ import "core:mem"
 import "core:os"
 import "core:strings"
 
-poll_file_get_events :: proc(w: ^Watcher_File_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
+poll_file_get_events :: proc (w: ^Watcher_File_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	os_fi, err := file_stat_alloc(w.path, w.allocator)
 	if err != .None {
 		os.file_info_delete(os_fi, w.allocator)
@@ -56,7 +56,7 @@ poll_file_get_events :: proc(w: ^Watcher_File_Poll, allocator: mem.Allocator, ou
 	}
 }
 
-poll_dir_get_events :: proc(w: ^Watcher_Dir_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
+poll_dir_get_events :: proc (w: ^Watcher_Dir_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	old := w.prev
 	current := make(map[string]File_Info, w.allocator)
 	snapshot_dir_alloc(w.path, &current, w.allocator, fullpath=true, recursive=false)
@@ -83,7 +83,7 @@ poll_dir_get_events :: proc(w: ^Watcher_Dir_Poll, allocator: mem.Allocator, out:
 	w.prev = current
 }
 
-poll_rec_get_events :: proc(w: ^Watcher_Recursive_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
+poll_rec_get_events :: proc (w: ^Watcher_Recursive_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	old := w.prev
 	current := make(map[string]File_Info, w.allocator)
 	snapshot_dir_alloc(w.path, &current, w.allocator, fullpath=true, recursive=true)
