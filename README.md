@@ -21,7 +21,7 @@ defer fsw.destroy(w)
 // User-driven event loop. Each get_events call drains the OS queue
 // and returns a fresh dynamic array of events.
 for {
-    events := fsw.get_events(w)
+    events := fsw.get_events(&w)
     defer fsw.delete_events(events)
 
     for event in events {
@@ -41,7 +41,7 @@ Pass `context.temp_allocator` for fire-and-forget use.
 
 ```odin
 // Fire-and-forget: no cleanup needed, the temp allocator handles it
-events := fsw.get_events(w, context.temp_allocator)
+events := fsw.get_events(&w, context.temp_allocator)
 for event in events {
     fmt.printfln("%v: %s", event.kind, event.path)
 }
@@ -58,20 +58,24 @@ delete(events)
 
 ## Constructors
 
-All constructors return a heap-allocated pointer.\
-Call `destroy` when done.
+All constructors return a stack-allocated value by default.\
+Call `destroy(w)` when done — `destroy` takes the watcher by value and frees its resources.
 
 | Constructor | Type | Backend |
 |---|---|---|
-| `watch_file(path)` | `^Watcher_File` | inotify/kqueue/IOCP |
-| `watch_dir(path)` | `^Watcher_Dir` | inotify/kqueue/IOCP |
-| `watch_dir_recursive(path)` | `^Watcher_Recursive` | inotify/kqueue/IOCP |
-| `watch_file_poll(path)` | `^Watcher_File_Poll` | polling |
-| `watch_dir_poll(path)` | `^Watcher_Dir_Poll` | polling |
-| `watch_dir_poll_recursive(path)` | `^Watcher_Recursive_Poll` | polling |
-| `watch_glob(pattern)` | `^Watcher_Glob` | recursive + filter |
+| `watch_file(path)` | `Watcher_File` | inotify/kqueue/IOCP |
+| `watch_dir(path)` | `Watcher_Dir` | inotify/kqueue/IOCP |
+| `watch_dir_recursive(path)` | `Watcher_Recursive` | inotify/kqueue/IOCP |
+| `watch_file_poll(path)` | `Watcher_File_Poll` | polling |
+| `watch_dir_poll(path)` | `Watcher_Dir_Poll` | polling |
+| `watch_dir_poll_recursive(path)` | `Watcher_Recursive_Poll` | polling |
+| `watch_glob(pattern)` | `Watcher_Glob` | recursive + filter |
 
 All constructors accept an optional `allocator` parameter (defaults to `context.allocator`).
+
+`get_events(&w)` and `rescan(&w)` take a pointer to the watcher — they read and update
+internal state (the `prev` map for poll watchers, the inotify/kqueue watch set for
+recursive watchers, etc.). `destroy(w)` takes the watcher by value.
 
 If you need to store a watcher opaquely without committing to a specific kind,
 use the `Watcher` tagged union — `destroy`, `get_events`,
@@ -81,7 +85,7 @@ and `rescan` all dispatch on it:
 w: fsw.Watcher
 w = fsw.watch_dir("/tmp") or_return
 defer fsw.destroy(w)
-events := fsw.get_events(w)
+events := fsw.get_events(&w)
 ```
 
 ### Native watchers
@@ -132,8 +136,8 @@ Event :: struct {
 Force a full rescan. Available for recursive and glob watchers:
 
 ```odin
-// works for ^Watcher_Recursive, ^Watcher_Recursive_Poll, ^Watcher_Glob
-err := fsw.rescan(w)
+// works for Watcher_Recursive, Watcher_Recursive_Poll, Watcher_Glob
+err := fsw.rescan(&w)
 ```
 
 For non-recursive watchers, `rescan` is a no-op.
