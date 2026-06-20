@@ -73,7 +73,6 @@ collect_events :: proc(
 			for e in batch {
 				delete(e.path, context.allocator)
 			}
-			delete(batch)
 		}
 		iterations += 1
 		for &e in batch {

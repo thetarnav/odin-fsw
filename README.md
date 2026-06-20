@@ -19,20 +19,24 @@ defer fsw.destroy(w)
 for {
     events := fsw.get_events(w)
     for event in events {
-        fmt.printf("%v: %s\n", event.kind, event.path)
+        fmt.printfln("%v: %s", event.kind, event.path)
+        delete(event.path) // free the path
     }
-    delete(events) // free backing array (paths freed separately below)
+    delete(events) // free backing array
+
+    // The library does not start any threads.
+    // sleep if you want to avoid a tight loop.
     time.sleep(100 * time.Millisecond)
 }
 ```
 
-`get_events` performs one OS read / poll cycle and returns all events that were available. The returned `[dynamic]Event` and each `event.path` string are allocated with the allocator passed to `get_events` (defaults to `context.allocator`). Pass `context.temp_allocator` for fire-and-forget use.
+`get_events` performs one OS read / poll cycle and returns all events that were available. The returned `[]Event` and each `event.path` string are allocated with the allocator passed to `get_events` (defaults to `context.allocator`). Pass `context.temp_allocator` for fire-and-forget use.
 
 ```odin
 // Fire-and-forget: no cleanup needed, the temp allocator handles it
 events := fsw.get_events(w, context.temp_allocator)
 for event in events {
-    fmt.printf("%v: %s\n", event.kind, event.path)
+    fmt.printfln("%v: %s", event.kind, event.path)
 }
 ```
 
@@ -89,33 +93,6 @@ Event :: struct {
 }
 ```
 
-## Get Events
-
-Pull events from a watcher. `get_events` returns all events from a single OS read / poll cycle as a `[dynamic]Event`. The backing array and the path strings inside are allocated with the `allocator` parameter (defaults to `context.allocator`).
-
-```odin
-events := fsw.get_events(w)
-for event in events {
-    fmt.printf("%v: %s\n", event.kind, event.path)
-}
-
-// Caller owns the returned array and must free it:
-for event in events {
-    delete(event.path, /* same allocator as get_events */)
-}
-delete(events)
-```
-
-Works with any watcher type via the procedure group.
-
-## Destroy
-
-Free a watcher and all its resources. The `destroy` procedure group accepts any watcher type:
-
-```odin
-fsw.destroy(w)  // works for all watcher types
-```
-
 ## Rescan
 
 Force a full rescan. Available for recursive and glob watchers:
@@ -128,10 +105,6 @@ For non-recursive watchers, `rescan` is a no-op.
 
 ## Gotchas
 
-### Allocator for returned events
-
-`get_events` allocates the returned `[dynamic]Event` and its path strings with the passed allocator. The watcher's own allocator is only for the watcher's internal state (OS handles, snapshot maps). These are two different lifecycles — use the `allocator` parameter to `get_events` to control the returned data's lifecycle independently.
-
 ### Glob pattern format
 
 `watch_glob` uses `filepath.match` for pattern matching. Patterns like `*.txt` match at the top level only; use `**/*.txt` for deeper matching if supported by your platform's `filepath.match`.
@@ -139,23 +112,6 @@ For non-recursive watchers, `rescan` is a no-op.
 ### Recursive watcher memory
 
 `watch_dir_recursive` and `watch_glob` allocate a map to track watched subdirectories. For very deep directory trees, this uses more memory than flat watchers.
-
-### User-driven polling
-
-The library does not start any threads. For polling watchers, you control the poll cadence. The recommended pattern is:
-
-```odin
-for {
-    events := fsw.get_events(w)
-    for event in events {
-        handle(event)
-    }
-    delete(events)
-    time.sleep(latency)
-}
-```
-
-For native watchers, `get_events` is non-blocking; sleep if you want to avoid a tight loop.
 
 ### Glob watcher event filtering
 
