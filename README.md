@@ -1,10 +1,10 @@
 # fsw — Filesystem Watcher for Odin
 
-Cross-platform file and directory watching library. Uses native backends where available (inotify on Linux, kqueue on macOS/FreeBSD, ReadDirectoryChangesW on Windows) with a polling fallback for all platforms.
+Cross-platform file and directory watching library. Uses native backends where available (inotify on Linux, kqueue on Darwin/FreeBSD/NetBSD/OpenBSD, ReadDirectoryChangesW on Windows) with a polling fallback for all platforms.
 
 ## Pull-Based API
 
-The library is **pull-based**: constructors create OS handles and prepare internal state but do not start threads. The user drives the event loop by calling `get_event` / `get_events` on a watcher.
+The library is **pull-based**: constructors create OS handles and prepare internal state but do not start threads. The user drives the event loop by calling `get_events` on a watcher.
 
 ```odin
 import fsw "odin-fsw"
@@ -15,29 +15,26 @@ assert(err == nil)
 defer fsw.destroy(w)
 
 // User-driven event loop. Each get_events call drains the OS queue
-// and returns a fresh slice of events.
+// and returns a fresh dynamic array of events.
 for {
-    for event in fsw.get_events(w) {
+    events := fsw.get_events(w)
+    for event in events {
         fmt.printf("%v: %s\n", event.kind, event.path)
     }
+    delete(events) // free backing array (paths freed separately below)
     time.sleep(100 * time.Millisecond)
 }
 ```
 
-If you only want one event at a time:
+`get_events` performs one OS read / poll cycle and returns all events that were available. The returned `[dynamic]Event` and each `event.path` string are allocated with the allocator passed to `get_events` (defaults to `context.allocator`). Pass `context.temp_allocator` for fire-and-forget use.
 
 ```odin
-for {
-    event, ok := fsw.get_event(w)
-    if !ok {
-        time.sleep(100 * time.Millisecond)
-        continue
-    }
+// Fire-and-forget: no cleanup needed, the temp allocator handles it
+events := fsw.get_events(w, context.temp_allocator)
+for event in events {
     fmt.printf("%v: %s\n", event.kind, event.path)
 }
 ```
-
-`get_event` returns the next buffered event (refilling from the OS on demand). `get_events` returns all events from a single OS read / poll cycle.
 
 ## Constructors
 
@@ -67,7 +64,7 @@ Use the OS-native notification mechanism. Preferred when available.
 
 Fallback for platforms without native support, or when latency-based polling is desired.
 
-- `watch_file_poll` — stat-based polling. The user drives polling by calling `get_event`/`get_events`; each call performs one `stat()`. The user should `time.sleep(latency)` between calls.
+- `watch_file_poll` — stat-based polling. The user drives polling by calling `get_events`; each call performs one `stat()`. The user should `time.sleep(latency)` between calls.
 - `watch_dir_poll` — snapshot-based directory polling. Each call does one snapshot diff.
 - `watch_dir_poll_recursive` — recursive snapshot-based polling.
 
@@ -76,7 +73,7 @@ Fallback for platforms without native support, or when latency-based polling is 
 Watches a directory recursively, filtering events through a glob pattern.
 
 ```odin
-w, _ := fsw.watch_glob("/tmp/*.txt", cb)
+w, err := fsw.watch_glob("/tmp/*.txt")
 ```
 
 The glob pattern must start with a directory prefix (e.g. `/tmp/*.txt`). The watcher extracts the static prefix as the watch root, then filters events through the pattern. Only files matching the pattern trigger events.
@@ -92,23 +89,24 @@ Event :: struct {
 }
 ```
 
-## Get Event
+## Get Events
 
-Pull events from a watcher. `get_event` returns the next event, or `false` when no events are currently available. `get_events` returns all events from a single OS read / poll cycle.
+Pull events from a watcher. `get_events` returns all events from a single OS read / poll cycle as a `[dynamic]Event`. The backing array and the path strings inside are allocated with the `allocator` parameter (defaults to `context.allocator`).
 
 ```odin
-event, ok := fsw.get_event(w)
-if ok {
-    fmt.printf("%v: %s\n", event.kind, event.path)
-}
-
 events := fsw.get_events(w)
 for event in events {
     fmt.printf("%v: %s\n", event.kind, event.path)
 }
+
+// Caller owns the returned array and must free it:
+for event in events {
+    delete(event.path, /* same allocator as get_events */)
+}
+delete(events)
 ```
 
-Both work with any watcher type via the procedure group.
+Works with any watcher type via the procedure group.
 
 ## Destroy
 
@@ -130,17 +128,9 @@ For non-recursive watchers, `rescan` is a no-op.
 
 ## Gotchas
 
-### Event path lifetime
+### Allocator for returned events
 
-Event paths are allocated with the watcher's allocator and remain valid until the **next** call to `get_event` / `get_events` on the same watcher, or until `destroy` is called. If you need to keep a path past that point, clone it:
-
-```odin
-event, ok := fsw.get_event(w)
-if ok {
-    my_path := strings.clone(event.path, my_allocator)
-    // my_path is now yours to manage
-}
-```
+`get_events` allocates the returned `[dynamic]Event` and its path strings with the passed allocator. The watcher's own allocator is only for the watcher's internal state (OS handles, snapshot maps). These are two different lifecycles — use the `allocator` parameter to `get_events` to control the returned data's lifecycle independently.
 
 ### Glob pattern format
 
@@ -156,9 +146,11 @@ The library does not start any threads. For polling watchers, you control the po
 
 ```odin
 for {
-    for event in fsw.get_events(w) {
+    events := fsw.get_events(w)
+    for event in events {
         handle(event)
     }
+    delete(events)
     time.sleep(latency)
 }
 ```
@@ -171,8 +163,8 @@ The glob watcher pulls events from an internal recursive watcher. Non-matching e
 
 ### Rescan after external changes
 
-For Linux `watch_dir_recursive` and `watch_dir_recursive` on macOS/FreeBSD: if subdirectories are deleted out from under the watcher, `rescan` rebuilds the watch set. For Windows, `ReadDirectoryChangesW` with `bWatchSubtree=TRUE` tracks subdirectory changes automatically, so rescan is a no-op.
+For Linux and kqueue-based recursive watchers: if subdirectories are deleted out from under the watcher, `rescan` rebuilds the watch set. For Windows, `ReadDirectoryChangesW` with `bWatchSubtree=TRUE` tracks subdirectory changes automatically, so rescan is a no-op.
 
 ### Path lifetime for glob events
 
-Events from `watch_glob` have paths that point into the watcher's internal `matched_files` map. They are stable as long as the file remains matched. If you need to keep the path past a subsequent `get_event`/`get_events` call, clone it.
+Events from `watch_glob` have paths that point into the watcher's internal `matched_files` map. They are stable as long as the file remains matched. If you need to keep the path past a subsequent `get_events` call, clone it.

@@ -1,13 +1,14 @@
-// backend_freebsd.odin — FreeBSD backend using kqueue + EVFILT_VNODE.
+// backend_kqueue.odin — kqueue backend for Darwin, FreeBSD, NetBSD, OpenBSD.
 //
-// Platform-specific backend compiled only on FreeBSD.
-// Pull-based: each get_events call does a non-blocking kevent() read and
-// a snapshot diff, appending all events to the caller's dynamic array.
+// Uses kqueue with EVFILT_VNODE watches. Pull-based: each get_events call
+// does a non-blocking kevent() read and a snapshot diff, appending all
+// events to the caller's dynamic array.
 //
 //   - Watcher_File: kqueue VNode watch on the file
 //   - Watcher_Dir:  kqueue VNode watch + snapshot diff for content changes
 //   - Watcher_Recursive: per-subdirectory fd registration with kqueue + snapshot diff
 
+#+build darwin, netbsd, openbsd, freebsd
 package fsw
 
 import "core:mem"
@@ -19,13 +20,11 @@ import "core:sys/posix"
 
 Native_File :: struct {
 	kq:   posix.FD,
-	fd:   int,
 	file: ^os.File,
 }
 
 Native_Dir :: struct {
 	kq:   posix.FD,
-	fd:   int,
 	file: ^os.File,
 	prev: map[string]File_Info,
 }
@@ -44,43 +43,45 @@ kq_normalize :: proc(fflags: kqueue.VNode_Flags) -> Event_Kind {
 	return .Modified
 }
 
-NO_WAIT: posix.timespec
+// Zero timespec: passed to kevent so it returns immediately instead of
+// waiting forever (which is what nil timeout means on macOS).
+@(private, rodata)
+no_wait: posix.timespec
 
 // === Watcher_File ===
 
-backend_file_init :: proc(w: ^Watcher_File) -> Error {
+backend_file_init :: proc(w: ^Watcher_File) -> (err: Error) {
 
 	track_start(w)
 
-	file, err := os.open(w.path, os.O_RDONLY)
-	if err != nil do return .Backend_Init_Failed
+	file, os_err := os.open(w.path, os.O_RDONLY)
+	if os_err != nil do return .Backend_Init_Failed
+	track_open(w, uintptr(file))
+	defer if err != nil {
+		os.close(file)
+		track_close(w, uintptr(file))
+	}
 
 	kq, errno := kqueue.kqueue()
-	if errno != .NONE {
-		os.close(file)
-		return .Backend_Init_Failed
-	}
+	if errno != .NONE do return .Backend_Init_Failed
 	track_open(w, kq)
+	defer if err != nil {
+		posix.close(kq)
+		track_close(w, kq)
+	}
 
-	fd := int(os.fd(file))
-	track_open(w, fd)
 	ev := kqueue.KEvent{
-		ident  = uintptr(fd),
+		ident  = uintptr(os.fd(file)),
 		filter = .VNode,
 		flags  = {.Add, .Clear},
 	}
 	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
-	if errno2 != .NONE {
-		posix.close(kq)
-		track_close(w, kq)
-		os.close(file)
-		return .Backend_Init_Failed
-	}
+	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.native.kq = kq
-	w.native.fd = fd
+	w.native.kq   = kq
 	w.native.file = file
+
 	return .None
 }
 
@@ -88,7 +89,7 @@ backend_file_destroy :: proc(w: ^Watcher_File) {
 	posix.close(w.native.kq)
 	track_close(w, w.native.kq)
 	os.close(w.native.file)
-	track_close(w, w.native.fd)
+	track_close(w, uintptr(w.native.file))
 	track_end(w)
 }
 
@@ -98,41 +99,41 @@ backend_file_get_events :: proc(w: ^Watcher_File, allocator: mem.Allocator, out:
 
 // === Watcher_Dir ===
 
-backend_dir_init :: proc(w: ^Watcher_Dir) -> Error {
+backend_dir_init :: proc(w: ^Watcher_Dir) -> (err: Error) {
 
 	track_start(w)
 
-	file, err := os.open(w.path, os.O_RDONLY)
-	if err != nil { return .Backend_Init_Failed }
+	file, os_err := os.open(w.path, os.O_RDONLY)
+	if os_err != nil do return .Backend_Init_Failed
+	track_open(w, uintptr(file))
+	defer if err != nil {
+		os.close(file)
+		track_close(w, uintptr(file))
+	}
 
 	kq, errno := kqueue.kqueue()
-	if errno != .NONE {
-		os.close(file)
-		return .Backend_Init_Failed
-	}
+	if errno != .NONE do return .Backend_Init_Failed
 	track_open(w, kq)
+	defer if err != nil {
+		posix.close(kq)
+		track_close(w, kq)
+	}
 
-	fd := int(os.fd(file))
-	track_open(w, fd)
 	ev := kqueue.KEvent{
-		ident  = uintptr(fd),
+		ident  = uintptr(os.fd(file)),
 		filter = .VNode,
 		flags  = {.Add, .Clear},
 	}
 	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
-	if errno2 != .NONE {
-		posix.close(kq)
-		track_close(w, kq)
-		os.close(file)
-		return .Backend_Init_Failed
-	}
+	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.native.kq = kq
-	w.native.fd = fd
+	w.native.kq   = kq
 	w.native.file = file
 	w.native.prev = make(map[string]File_Info, w.allocator)
+
 	snapshot_dir_by_name_alloc(w.path, &w.native.prev, w.allocator)
+
 	return .None
 }
 
@@ -140,8 +141,8 @@ backend_dir_destroy :: proc(w: ^Watcher_Dir) {
 	posix.close(w.native.kq)
 	track_close(w, w.native.kq)
 	os.close(w.native.file)
-	track_close(w, w.native.fd)
-	for k in w.native.prev { delete(k, w.allocator) }
+	track_close(w, uintptr(w.native.file))
+	for k in w.native.prev do delete(k, w.allocator)
 	delete(w.native.prev)
 	track_end(w)
 }
@@ -157,12 +158,15 @@ backend_rec_init :: proc(w: ^Watcher_Recursive) -> Error {
 	track_start(w)
 
 	kq, errno := kqueue.kqueue()
-	if errno != .NONE { return .Backend_Init_Failed }
+	if errno != .NONE do return .Backend_Init_Failed
 	track_open(w, kq)
-	w.native.kq = kq
+
+	w.native.kq      = kq
 	w.native.watches = make(map[int]string, w.allocator)
-	w.native.prev = make(map[string]map[string]File_Info, w.allocator)
-	freebsd_rec_add_watch(w, w.path)
+	w.native.prev    = make(map[string]map[string]File_Info, w.allocator)
+
+	kqueue_rec_add_watch(w, w.path)
+
 	return .None
 }
 
@@ -195,21 +199,22 @@ backend_rec_rescan :: proc(w: ^Watcher_Recursive) -> Error {
 		posix.close(posix.FD(fd_key))
 		track_close(w, fd_key)
 	}
-	for _, v in w.native.watches { delete(v, w.allocator) }
+	for _, v in w.native.watches do delete(v, w.allocator)
 	clear(&w.native.watches)
 	for _, inner in w.native.prev {
-		for k in inner { delete(k, w.allocator) }
+		for k in inner do delete(k, w.allocator)
 		delete(inner)
 	}
 	clear(&w.native.prev)
-	freebsd_rec_add_watch(w, w.path)
+	kqueue_rec_add_watch(w, w.path)
 	return .None
 }
 
-freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
+kqueue_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 
 	cs, cs_err := strings.clone_to_cstring(dir, context.temp_allocator)
 	if cs_err != nil do return
+
 	fd := posix.open(cs, posix.O_Flags{})
 	if fd == posix.FD(-1) do return
 	track_open(w, fd)
@@ -245,7 +250,7 @@ freebsd_rec_add_watch :: proc(w: ^Watcher_Recursive, dir: string) {
 		if entry.name == "." || entry.name == ".." do continue
 		if entry.type == .Directory {
 			subdir := filepath.join({dir, entry.name}, w.allocator) or_continue
-			freebsd_rec_add_watch(w, subdir)
+			kqueue_rec_add_watch(w, subdir)
 		}
 	}
 }
@@ -260,7 +265,7 @@ backend_rec_get_events :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, 
 kqueue_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	for {
-		n, _ := kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
+		n, _ := kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
 		if n <= 0 do break
 		ev := events[0]
 		if ev.filter == .VNode {
@@ -276,7 +281,7 @@ kqueue_drain_file :: proc(w: ^Watcher_File, allocator: mem.Allocator, out: ^[dyn
 @(private)
 kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
-	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
+	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
 
 	old := w.native.prev
 	current := make(map[string]File_Info, w.allocator)
@@ -307,7 +312,7 @@ kqueue_drain_dir :: proc(w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynam
 @(private)
 kqueue_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [64]kqueue.KEvent
-	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &NO_WAIT)
+	_, _ = kqueue.kevent(w.native.kq, nil, events[:], &no_wait)
 
 	for dir_path, dir_prev in w.native.prev {
 		current := make(map[string]File_Info, w.allocator)
@@ -326,7 +331,7 @@ kqueue_drain_rec :: proc(w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^
 				fullpath, join_err := filepath.join({dir_path, name}, allocator)
 				if join_err != nil { continue }
 				if fi.is_dir {
-					freebsd_rec_add_watch(w, fullpath)
+					kqueue_rec_add_watch(w, fullpath)
 				}
 				append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
 			} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
