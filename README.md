@@ -4,7 +4,7 @@ Cross-platform file and directory watching library.\
 Uses native backends where available (inotify on Linux, kqueue on Darwin/FreeBSD/NetBSD/OpenBSD, ReadDirectoryChangesW on Windows),\
 with a polling fallback for all platforms.
 
-## Pull-Based API
+## Usage
 
 The library is **pull-based**:
 constructors create OS handles and prepare internal state but do not start threads.
@@ -13,7 +13,7 @@ The user drives the event loop by calling `get_events` on a watcher.
 ```odin
 import fsw "odin-fsw"
 
-// Create a native watcher for a directory. No thread is started.
+// Create a native watcher for a directory.
 w, err := fsw.watch_dir("/tmp")
 assert(err == nil)
 defer fsw.destroy(w)
@@ -28,7 +28,6 @@ for {
         fmt.printfln("%v: %s", event.kind, event.path)
     }
 
-    // The library does not start any threads.
     // sleep if you want to avoid a tight loop.
     time.sleep(100 * time.Millisecond)
 }
@@ -51,17 +50,16 @@ for event in events {
 Or free manually:
 
 ```odin
-    for event in events {
-        delete(event.path)
-    }
-    delete(events)
+for event in events {
+    delete(event.path)
+}
+delete(events)
 ```
 
 ## Constructors
 
 All constructors return a heap-allocated pointer.\
-Call `destroy` when done.\
-None of the constructors take a callback or start a thread.
+Call `destroy` when done.
 
 | Constructor | Type | Backend |
 |---|---|---|
@@ -76,8 +74,8 @@ None of the constructors take a callback or start a thread.
 All constructors accept an optional `allocator` parameter (defaults to `context.allocator`).
 
 If you need to store a watcher opaquely without committing to a specific kind,
-use the `Watcher` tagged union — `destroy`, `get_events`, and `rescan` all
-dispatch on it:
+use the `Watcher` tagged union — `destroy`, `get_events`,
+and `rescan` all dispatch on it:
 
 ```odin
 w: fsw.Watcher
@@ -116,8 +114,7 @@ Watches a directory recursively, filtering events through a glob pattern.
 w, err := fsw.watch_glob("/tmp/*.txt")
 ```
 
-The glob pattern must start with a directory prefix (e.g. `/tmp/*.txt`).\
-The watcher extracts the static prefix as the watch root, then filters events through the pattern.\
+The watcher extracts the static directory prefix as the watch root, then filters events through the pattern.\
 Only files matching the pattern trigger events.
 
 ## Events
@@ -154,12 +151,6 @@ Use `**/*.txt` for deeper matching if supported by your platform's `filepath.mat
 `watch_dir_recursive` and `watch_glob` allocate a map to track watched subdirectories.\
 For very deep directory trees, this uses more memory than flat watchers.
 
-### Glob watcher event filtering
-
-The glob watcher pulls events from an internal recursive watcher.\
-Non-matching events are consumed but discarded,\
-so a glob watcher is more efficient when most events would not match the pattern.
-
 ### Rescan after external changes
 
 For Linux and kqueue-based recursive watchers:\
@@ -173,7 +164,7 @@ so rescan is a no-op.
 A small CLI lives in `example/main.odin`. It wraps `watch_glob` and prints events to stdout.
 
 ```sh
-make example # odin run example -- "./*.odin"
+make example # odin run example -- "./*.odin
 # or
 odin run example -- "/tmp/**/*.log" 200  # 200ms poll interval
 ```
