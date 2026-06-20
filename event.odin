@@ -30,8 +30,7 @@ Error :: enum {
 // valid until the next call to get_event/get_events on the same watcher
 // (or until destroy). Clone it if you need to keep it past that.
 Event :: struct {
-	kind:     Event_Kind, // What happened.
-	path:     string,     // Absolute path of the affected file/directory.
-	old_path: string,     // Previous path (for Renamed events, currently unused).
-	is_dir:   bool,       // True if the target is a directory.
+	kind:   Event_Kind, // What happened.
+	path:   string,     // Absolute path of the affected file/directory.
+	is_dir: bool,       // True if the target is a directory.
 }

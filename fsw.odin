@@ -21,6 +21,7 @@
 
 package fsw
 
+import "core:strings"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
@@ -439,6 +440,21 @@ get_events :: proc {
 	get_events_dir_poll,
 	get_events_rec_poll,
 	get_events_glob,
+}
+
+clone_event :: proc (e: Event, allocator := context.allocator, loc := #caller_location) -> Event {
+	e := e
+	e.path = strings.clone(e.path, allocator, loc)
+	return e
+}
+
+// helper for freeing the events slice returned by get_events
+delete_events :: proc (events: []Event, allocator := context.allocator, loc := #caller_location) -> (err: mem.Allocator_Error) {
+	for e in events {
+		delete(e.path, allocator, loc) or_return
+	}
+	delete(events, allocator, loc) or_return
+	return
 }
 
 // === rescan ===

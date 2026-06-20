@@ -88,20 +88,16 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 // are allocated with `allocator`.
 glob_get_events :: proc(w: ^Watcher_Glob, allocator := context.allocator) -> []Event {
 
-	inner_events := get_events(&w.inner, allocator)
-	defer {
-		for e in inner_events {
-			delete(e.path, allocator)
-		}
-	}
+	inner_events := get_events(&w.inner, context.temp_allocator)
 
 	out := make([dynamic]Event, 0, len(inner_events), allocator)
-	for &e in inner_events {
-		key_path, matched := glob_filter_event(w, &e)
-		if matched {
-			append(&out, Event{kind = e.kind, path = strings.clone(key_path, allocator), is_dir = e.is_dir})
-		}
+	for e in inner_events {
+		key_path := glob_filter_event(w, e) or_continue
+		event := e
+		event.path = strings.clone(key_path, allocator)
+		append(&out, event)
 	}
+
 	shrink(&out)
 	return out[:]
 }
@@ -111,38 +107,31 @@ glob_get_events :: proc(w: ^Watcher_Glob, allocator := context.allocator) -> []E
 // to use as the event's path, and whether the event matches the pattern.
 // The returned key_path is owned by matched_files and remains valid until
 // that key is removed.
-glob_filter_event :: proc(gw: ^Watcher_Glob, event: ^Event) -> (key_path: string, matched: bool) {
-	rel, rel_err := filepath.rel(gw.inner.path, event.path, context.temp_allocator)
-	if rel_err != nil do return "", false
+glob_filter_event :: proc(w: ^Watcher_Glob, event: Event) -> (key_path: string, matched: bool) {
 
 	#partial switch event.kind {
 	case .Added:
-		if !event.is_dir && glob_match_path(gw.pattern, rel) {
-			path_clone := strings.clone(event.path, gw.allocator)
-			gw.matched_files[path_clone] = true
-			return path_clone, true
-		}
+		if event.is_dir do break
+		rel := filepath.rel(w.inner.path, event.path, context.temp_allocator) or_break
+		glob_match_path(w.pattern, rel) or_break
+		path_clone := strings.clone(event.path, w.allocator) or_break
+		w.matched_files[path_clone] = true
+		return path_clone, true
+
 	case .Removed:
-		for key in gw.matched_files {
+	case .Renamed:
+		for key in w.matched_files {
 			if key == event.path {
-				delete_key(&gw.matched_files, key)
-				delete(key, gw.allocator)
+				delete_key(&w.matched_files, key)
+				delete(key, w.allocator)
 				return key, true
 			}
 		}
 	case .Modified:
-		if _, ok := gw.matched_files[event.path]; ok {
+		if _, ok := w.matched_files[event.path]; ok {
 			return event.path, true
 		}
-	case .Renamed:
-		for key in gw.matched_files {
-			if key == event.path {
-				delete_key(&gw.matched_files, key)
-				delete(key, gw.allocator)
-				return key, true
-			}
-		}
-	case:
 	}
+
 	return "", false
 }

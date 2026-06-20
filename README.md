@@ -86,10 +86,9 @@ The glob pattern must start with a directory prefix (e.g. `/tmp/*.txt`). The wat
 
 ```odin
 Event :: struct {
-    kind:     Event_Kind,  // Added, Removed, Modified, Renamed, Overflow, Invalidated
-    path:     string,      // Absolute path of the affected file/directory
-    old_path: string,      // Previous path (for Renamed events, currently unused)
-    is_dir:   bool,        // True if the target is a directory
+    kind:   Event_Kind,  // Added, Removed, Modified, Renamed, Overflow, Invalidated
+    path:   string,      // Absolute path of the affected file/directory
+    is_dir: bool,        // True if the target is a directory
 }
 ```
 

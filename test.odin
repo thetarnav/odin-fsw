@@ -50,11 +50,6 @@ write_file :: proc(path: string, content: string) {
 // `collected`. The predicate decides which events are interesting. Stops
 // as soon as the predicate returns true.
 
-Collected_Event :: struct {
-	kind: Event_Kind,
-	path: string,
-}
-
 // collect_events drives the watcher in a loop until timeout or found.
 // `polling_interval` is how long to sleep between get_events calls.
 collect_events :: proc(
@@ -63,20 +58,21 @@ collect_events :: proc(
 	timeout: time.Duration,
 	polling_interval: time.Duration,
 	predicate: proc(e: ^Event) -> bool,
-) -> (events: [dynamic]Collected_Event, found: bool) {
-	events = make([dynamic]Collected_Event, 0, 16, context.temp_allocator)
+) -> (events: []Event, found: bool) {
+
+	events_arr := make([dynamic]Event, 0, 16, context.temp_allocator)
 	deadline := time.time_to_unix(time.now()) + i64(timeout / time.Second) + 1
+
 	iterations: int
 	ev_loop: for time.time_to_unix(time.now()) < deadline {
-		batch := get_events(w, context.temp_allocator)
-		defer {
-			for e in batch {
-				delete(e.path, context.temp_allocator)
-			}
-		}
+
+		// get events with defailt allocator to track proper event freeing
+		batch := get_events(w)
+		defer delete_events(batch)
+
 		iterations += 1
 		for &e in batch {
-			append(&events, Collected_Event{e.kind, strings.clone(e.path, context.temp_allocator)})
+			append(&events_arr, clone_event(e, context.temp_allocator))
 			if predicate(&e) {
 				found = true
 				break ev_loop
@@ -87,7 +83,8 @@ collect_events :: proc(
 	if !found {
 		fmt.eprintf("  [debug] collect_events timed out after %v (%d iterations, %d events)\n", timeout, iterations, len(events))
 	}
-	return
+
+	return events_arr[:], found
 }
 
 // === Tests ===
