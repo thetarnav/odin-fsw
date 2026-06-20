@@ -167,3 +167,15 @@ if subdirectories are deleted out from under the watcher,
 `rescan` rebuilds the watch set.\
 For Windows, `ReadDirectoryChangesW` with `bWatchSubtree=TRUE` tracks subdirectory changes automatically,
 so rescan is a no-op.
+
+## Demo CLI
+
+A small CLI lives in `example/main.odin`. It wraps `watch_glob` and prints events to stdout.
+
+```sh
+make example # odin run example -- "./*.odin"
+# or
+odin run example -- "/tmp/**/*.log" 200  # 200ms poll interval
+```
+
+Quote the glob so your shell does not expand it. Press Ctrl-C to stop.
