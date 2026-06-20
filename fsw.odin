@@ -132,7 +132,7 @@ Watcher :: union {
 }
 
 // watch_file creates a native watcher for a single file.
-// Initializes OS handles. Does NOT start a thread.
+// Initializes OS handles.
 // Call destroy(w) when done.
 @require_results
 watch_file :: proc (path: string, allocator := context.allocator) -> (Watcher_File, Error) {
@@ -155,7 +155,7 @@ watch_file :: proc (path: string, allocator := context.allocator) -> (Watcher_Fi
 }
 
 // watch_dir creates a native watcher for a directory (non-recursive).
-// Initializes OS handles. Does NOT start a thread.
+// Initializes OS handles.
 // Only events in the immediate directory are reported.
 @require_results
 watch_dir :: proc (path: string, allocator := context.allocator) -> (Watcher_Dir, Error) {
@@ -178,7 +178,7 @@ watch_dir :: proc (path: string, allocator := context.allocator) -> (Watcher_Dir
 }
 
 // watch_dir_recursive creates a native watcher for a directory tree.
-// Initializes OS handles and registers all subdirectories. Does NOT start a thread.
+// Initializes OS handles and registers all subdirectories.
 // Subdirectories created after init are auto-watched when the kernel reports an
 // .Added event for them (on the first get_events call that processes the event).
 @require_results
@@ -202,7 +202,7 @@ watch_dir_recursive :: proc (path: string, allocator := context.allocator) -> (W
 }
 
 // watch_file_poll creates a polling watcher for a single file.
-// No thread is started. The user drives polling by calling get_events.
+// The user drives polling by calling get_events.
 // Each call performs a single stat() check.
 @require_results
 watch_file_poll :: proc (path: string, allocator := context.allocator) -> (Watcher_File_Poll, Error) {
@@ -231,7 +231,7 @@ watch_file_poll :: proc (path: string, allocator := context.allocator) -> (Watch
 }
 
 // watch_dir_poll creates a polling watcher for a directory.
-// No thread is started. Each get_events call performs a single
+// Each get_events call performs a single
 // snapshot diff.
 @require_results
 watch_dir_poll :: proc (path: string, allocator := context.allocator) -> (Watcher_Dir_Poll, Error) {
@@ -252,7 +252,7 @@ watch_dir_poll :: proc (path: string, allocator := context.allocator) -> (Watche
 }
 
 // watch_dir_poll_recursive creates a polling watcher for a directory tree.
-// No thread is started. Each get_events call performs a single
+// Each get_events call performs a single
 // recursive snapshot diff.
 @require_results
 watch_dir_poll_recursive :: proc (path: string, allocator := context.allocator) -> (Watcher_Recursive_Poll, Error) {
@@ -274,7 +274,7 @@ watch_dir_poll_recursive :: proc (path: string, allocator := context.allocator) 
 // watch_glob creates a watcher that filters events through a glob pattern.
 // The static prefix of the pattern is used as the watch root (e.g. "/tmp" from "/tmp/*.txt").
 // The directory is watched recursively; only files matching the pattern trigger events.
-// No thread is started. Performs an initial scan to detect pre-existing matching files.
+// Performs an initial scan to detect pre-existing matching files.
 @require_results
 watch_glob :: proc (pattern: string, allocator := context.allocator) -> (Watcher_Glob, Error) {
 
