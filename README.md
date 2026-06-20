@@ -68,9 +68,9 @@ None of the constructors take a callback or start a thread.
 | `watch_file(path)` | `^Watcher_File` | inotify/kqueue/IOCP |
 | `watch_dir(path)` | `^Watcher_Dir` | inotify/kqueue/IOCP |
 | `watch_dir_recursive(path)` | `^Watcher_Recursive` | inotify/kqueue/IOCP |
-| `watch_file_poll(path, latency)` | `^Watcher_File_Poll` | polling |
-| `watch_dir_poll(path, latency)` | `^Watcher_Dir_Poll` | polling |
-| `watch_dir_poll_recursive(path, latency)` | `^Watcher_Recursive_Poll` | polling |
+| `watch_file_poll(path)` | `^Watcher_File_Poll` | polling |
+| `watch_dir_poll(path)` | `^Watcher_Dir_Poll` | polling |
+| `watch_dir_poll_recursive(path)` | `^Watcher_Recursive_Poll` | polling |
 | `watch_glob(pattern)` | `^Watcher_Glob` | recursive + filter |
 
 All constructors accept an optional `allocator` parameter (defaults to `context.allocator`).
@@ -97,16 +97,16 @@ Use the OS-native notification mechanism. Preferred when available.
 
 ### Polling watchers
 
-Fallback for platforms without native support,
-or when latency-based polling is desired.
+Fallback when latency-based polling is desired.
 
 - `watch_file_poll` — stat-based polling.
   User drives polling by calling `get_events`;
-  each call performs one `stat()`.\
-  User should `time.sleep(latency)` between calls.
+  each call performs one `stat()`.
 - `watch_dir_poll` — snapshot-based directory polling.
   Each call does one snapshot diff.
 - `watch_dir_poll_recursive` — recursive snapshot-based polling.
+
+User should `time.sleep(latency)` between `get_events` calls.
 
 ### Glob watcher
 

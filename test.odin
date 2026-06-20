@@ -97,7 +97,7 @@ test_poll_file_watcher :: proc(t: ^testing.T) {
 	filepath_a, _ := os.join_path({dir, "a.txt"}, context.temp_allocator)
 	write_file(filepath_a, "hello")
 
-	w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
+	w, err := watch_file_poll(filepath_a)
 	testing.expectf(t, err == .None, "watch_file_poll error: %v", err)
 	if err != nil do return
 	defer destroy(w)
@@ -124,7 +124,7 @@ test_poll_dir_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "poll_dir")
 	defer remove_all(dir)
 
-	w, err := watch_dir_poll(dir, 50 * time.Millisecond)
+	w, err := watch_dir_poll(dir)
 	testing.expectf(t, err == .None, "watch_dir_poll error: %v", err)
 	if err != nil do return
 	defer destroy(w)
@@ -160,7 +160,7 @@ test_poll_recursive_watcher :: proc(t: ^testing.T) {
 	dir := make_temp_dir(t, "poll_rec")
 	defer remove_all(dir)
 
-	w, err := watch_dir_poll_recursive(dir, 50 * time.Millisecond)
+	w, err := watch_dir_poll_recursive(dir)
 	testing.expectf(t, err == .None, "watch_dir_poll_recursive error: %v", err)
 	if err != nil do return
 	defer destroy(w)
@@ -402,14 +402,14 @@ test_stress_rapid_lifecycle :: proc(t: ^testing.T) {
 
 	// Create and destroy 20 watchers rapidly
 	for i in 0..<20 {
-		w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
+		w, err := watch_file_poll(filepath_a)
 		testing.expectf(t, err == .None, "rapid lifecycle %d: error %v", i, err)
 		if err != nil { return }
 		destroy(w)
 	}
 
 	// Final watcher should still work
-	w, err := watch_file_poll(filepath_a, 50 * time.Millisecond)
+	w, err := watch_file_poll(filepath_a)
 	testing.expectf(t, err == .None, "final watcher error: %v", err)
 	if err != nil { return }
 	defer destroy(w)

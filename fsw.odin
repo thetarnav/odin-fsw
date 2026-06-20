@@ -26,7 +26,6 @@ import "core:strings"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
-import "core:time"
 
 // === Event types ===
 
@@ -89,7 +88,6 @@ Watcher_Recursive :: struct {
 Watcher_File_Poll :: struct {
 	path:      string,
 	allocator: mem.Allocator,
-	latency:   time.Duration,
 	prev:      File_Info,
 }
 
@@ -98,7 +96,6 @@ Watcher_File_Poll :: struct {
 Watcher_Dir_Poll :: struct {
 	path:      string,
 	allocator: mem.Allocator,
-	latency:   time.Duration,
 	prev:      map[string]File_Info,
 }
 
@@ -107,7 +104,6 @@ Watcher_Dir_Poll :: struct {
 Watcher_Recursive_Poll :: struct {
 	path:      string,
 	allocator: mem.Allocator,
-	latency:   time.Duration,
 	prev:      map[string]File_Info,
 }
 
@@ -221,10 +217,9 @@ watch_dir_recursive :: proc(path: string, allocator := context.allocator) -> (^W
 
 // watch_file_poll creates a polling watcher for a single file.
 // No thread is started. The user drives polling by calling get_events.
-// Each call performs a single stat() check; the user should sleep `latency`
-// between calls (e.g. time.sleep(latency) in their loop).
+// Each call performs a single stat() check.
 @require_results
-watch_file_poll :: proc(path: string, latency: time.Duration, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
+watch_file_poll :: proc(path: string, allocator := context.allocator) -> (^Watcher_File_Poll, Error) {
 
 	p, err := filepath.abs(path, allocator)
 	if err != nil do return nil, .Invalid_Path
@@ -245,7 +240,6 @@ watch_file_poll :: proc(path: string, latency: time.Duration, allocator := conte
 	w^ = Watcher_File_Poll{
 		path      = p,
 		allocator = allocator,
-		latency   = latency,
 		prev      = fi,
 	}
 
@@ -256,7 +250,7 @@ watch_file_poll :: proc(path: string, latency: time.Duration, allocator := conte
 // No thread is started. Each get_events call performs a single
 // snapshot diff.
 @require_results
-watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
+watch_dir_poll :: proc(path: string, allocator := context.allocator) -> (^Watcher_Dir_Poll, Error) {
 
 	p, err := filepath.abs(path, allocator)
 	if err != nil do return nil, .Invalid_Path
@@ -270,7 +264,6 @@ watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := contex
 	w^ = Watcher_Dir_Poll{
 		path      = p,
 		allocator = allocator,
-		latency   = latency,
 		prev      = prev,
 	}
 
@@ -281,7 +274,7 @@ watch_dir_poll :: proc(path: string, latency: time.Duration, allocator := contex
 // No thread is started. Each get_events call performs a single
 // recursive snapshot diff.
 @require_results
-watch_dir_poll_recursive :: proc(path: string, latency: time.Duration, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error) {
+watch_dir_poll_recursive :: proc(path: string, allocator := context.allocator) -> (^Watcher_Recursive_Poll, Error) {
 	p, err := filepath.abs(path, allocator)
 	if err != nil {
 		return nil, .Invalid_Path
@@ -293,7 +286,6 @@ watch_dir_poll_recursive :: proc(path: string, latency: time.Duration, allocator
 	w^ = Watcher_Recursive_Poll{
 		path      = p,
 		allocator = allocator,
-		latency   = latency,
 		prev      = prev,
 	}
 	return w, .None
