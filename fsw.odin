@@ -58,18 +58,18 @@ Event :: struct {
 
 // Watcher_File watches a single file using the OS-native backend.
 Watcher_File :: struct {
-	path:      string,
-	allocator: mem.Allocator,
-	native:    Native_File,
+	path:             string,
+	allocator:        mem.Allocator,
+	using native:     Native_File,
 	_track_resources: Track_Resources, // for testing
 }
 
 // Watcher_Dir watches a directory (non-recursive) using the OS-native backend.
 // Only immediate children are reported.
 Watcher_Dir :: struct {
-	path:      string,
-	allocator: mem.Allocator,
-	native:    Native_Dir,
+	path:             string,
+	allocator:        mem.Allocator,
+	using native:     Native_Dir,
 	_track_resources: Track_Resources, // for testing
 }
 
@@ -77,9 +77,9 @@ Watcher_Dir :: struct {
 // Allocates a map to track per-subdirectory watches. New subdirectories
 // are automatically watched when detected.
 Watcher_Recursive :: struct {
-	path:      string,
-	allocator: mem.Allocator,
-	native:    Native_Recursive,
+	path:             string,
+	allocator:        mem.Allocator,
+	using native:     Native_Recursive,
 	_track_resources: Track_Resources, // for testing
 }
 
