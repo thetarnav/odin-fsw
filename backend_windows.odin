@@ -61,23 +61,23 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 		nil,
 	)
 	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
-	track_open(w, handle)
+	track_open(w, uintptr(handle))
 	defer if err != nil {
 		windows.CloseHandle(handle)
-		track_close(w, handle)
+		track_close(w, uintptr(handle))
 	}
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil do return .Backend_Init_Failed
-	track_open(w, event)
+	track_open(w, uintptr(event))
 	defer if err != nil {
 		windows.CloseHandle(event)
-		track_close(w, event)
+		track_close(w, uintptr(event))
 	}
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
 	if iocp == nil do return .Backend_Init_Failed
-	track_open(w, iocp)
+	track_open(w, uintptr(iocp))
 
 	w.overlapped = windows.OVERLAPPED{hEvent=event}
 	w.buf        = make([]u8, 4096, w.allocator)
@@ -94,15 +94,15 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 backend_file_destroy :: proc (w: ^Watcher_File) {
 	if w.iocp != nil {
 		windows.CloseHandle(w.iocp)
-		track_close(w, w.iocp)
+		track_close(w, uintptr(w.iocp))
 	}
 	if w.event != nil {
 		windows.CloseHandle(w.event)
-		track_close(w, w.event)
+		track_close(w, uintptr(w.event))
 	}
 	if w.handle != nil {
 		windows.CloseHandle(w.handle)
-		track_close(w, w.handle)
+		track_close(w, uintptr(w.handle))
 	}
 	if w.buf != nil {
 		delete(w.buf, w.allocator)
@@ -133,23 +133,23 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 		nil,
 	)
 	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
-	track_open(w, handle)
+	track_open(w, uintptr(handle))
 	defer if err != nil {
 		windows.CloseHandle(handle)
-		track_close(w, handle)
+		track_close(w, uintptr(handle))
 	}
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil do return .Backend_Init_Failed
-	track_open(w, event)
+	track_open(w, uintptr(event))
 	defer if err != nil {
 		windows.CloseHandle(event)
-		track_close(w, event)
+		track_close(w, uintptr(event))
 	}
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
 	if iocp == nil do return .Backend_Init_Failed
-	track_open(w, iocp)
+	track_open(w, uintptr(iocp))
 
 	w.overlapped = windows.OVERLAPPED{hEvent=event}
 	w.buf        = make([]u8, 4096, w.allocator)
@@ -165,15 +165,15 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 backend_dir_destroy :: proc (w: ^Watcher_Dir) {
 	if w.iocp != nil {
 		windows.CloseHandle(w.iocp)
-		track_close(w, w.iocp)
+		track_close(w, uintptr(w.iocp))
 	}
 	if w.event != nil {
 		windows.CloseHandle(w.event)
-		track_close(w, w.event)
+		track_close(w, uintptr(w.event))
 	}
 	if w.handle != nil {
 		windows.CloseHandle(w.handle)
-		track_close(w, w.handle)
+		track_close(w, uintptr(w.handle))
 	}
 	if w.buf != nil {
 		delete(w.buf, w.allocator)
@@ -204,23 +204,23 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> (err: Error) {
 		nil,
 	)
 	if handle == windows.INVALID_HANDLE_VALUE do return .Backend_Init_Failed
-	track_open(w, handle)
+	track_open(w, uintptr(handle))
 	defer if err != nil {
 		windows.CloseHandle(handle)
-		track_close(w, handle)
+		track_close(w, uintptr(handle))
 	}
 
 	event := windows.CreateEventW(nil, true, false, nil)
 	if event == nil do return .Backend_Init_Failed
-	track_open(w, event)
+	track_open(w, uintptr(event))
 	defer if err != nil {
 		windows.CloseHandle(event)
-		track_close(w, event)
+		track_close(w, uintptr(event))
 	}
 
 	iocp := windows.CreateIoCompletionPort(handle, nil, 0, 1)
 	if iocp == nil do return .Backend_Init_Failed
-	track_open(w, iocp)
+	track_open(w, uintptr(iocp))
 
 	w.overlapped = windows.OVERLAPPED{hEvent=event}
 	w.buf        = make([]u8, 8192, w.allocator)
@@ -236,15 +236,15 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> (err: Error) {
 backend_rec_destroy :: proc (w: ^Watcher_Recursive) {
 	if w.iocp != nil {
 		windows.CloseHandle(w.iocp)
-		track_close(w, w.iocp)
+		track_close(w, uintptr(w.iocp))
 	}
 	if w.event != nil {
 		windows.CloseHandle(w.event)
-		track_close(w, w.event)
+		track_close(w, uintptr(w.event))
 	}
 	if w.handle != nil {
 		windows.CloseHandle(w.handle)
-		track_close(w, w.handle)
+		track_close(w, uintptr(w.handle))
 	}
 	track_end(w)
 }
