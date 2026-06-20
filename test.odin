@@ -68,10 +68,10 @@ collect_events :: proc(
 	deadline := time.time_to_unix(time.now()) + i64(timeout / time.Second) + 1
 	iterations: int
 	ev_loop: for time.time_to_unix(time.now()) < deadline {
-		batch := get_events(w)
+		batch := get_events(w, context.temp_allocator)
 		defer {
 			for e in batch {
-				delete(e.path, context.allocator)
+				delete(e.path, context.temp_allocator)
 			}
 		}
 		iterations += 1

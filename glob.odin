@@ -87,6 +87,7 @@ glob_rescan :: proc(w: ^Watcher_Glob) {
 // events are cloned and returned. The returned slice and its path strings
 // are allocated with `allocator`.
 glob_get_events :: proc(w: ^Watcher_Glob, allocator := context.allocator) -> []Event {
+
 	inner_events := get_events(&w.inner, allocator)
 	defer {
 		for e in inner_events {
@@ -95,13 +96,13 @@ glob_get_events :: proc(w: ^Watcher_Glob, allocator := context.allocator) -> []E
 	}
 
 	out := make([dynamic]Event, 0, len(inner_events), allocator)
-	defer shrink(&out)
 	for &e in inner_events {
 		key_path, matched := glob_filter_event(w, &e)
 		if matched {
 			append(&out, Event{kind = e.kind, path = strings.clone(key_path, allocator), is_dir = e.is_dir})
 		}
 	}
+	shrink(&out)
 	return out[:]
 }
 

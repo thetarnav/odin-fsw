@@ -381,24 +381,24 @@ destroy :: proc {
 // For native backends, performs a non-blocking read of the OS notification queue.
 get_events_file :: proc(w: ^Watcher_File, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
-	defer shrink(&events)
 	backend_file_get_events(w, allocator, &events)
+	shrink(&events)
 	return events[:]
 }
 
 // get_events_dir returns all available events from a Watcher_Dir.
 get_events_dir :: proc(w: ^Watcher_Dir, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
-	defer shrink(&events)
 	backend_dir_get_events(w, allocator, &events)
+	shrink(&events)
 	return events[:]
 }
 
 // get_events_rec returns all available events from a Watcher_Recursive.
 get_events_rec :: proc(w: ^Watcher_Recursive, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
-	defer shrink(&events)
 	backend_rec_get_events(w, allocator, &events)
+	shrink(&events)
 	return events[:]
 }
 
@@ -407,24 +407,24 @@ get_events_glob :: glob_get_events
 // get_events_file_poll returns all available events from a Watcher_File_Poll.
 get_events_file_poll :: proc(w: ^Watcher_File_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 4, allocator)
-	defer shrink(&events)
 	poll_file_get_events(w, allocator, &events)
+	shrink(&events)
 	return events[:]
 }
 
 // get_events_dir_poll returns all available events from a Watcher_Dir_Poll.
 get_events_dir_poll :: proc(w: ^Watcher_Dir_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
-	defer shrink(&events)
 	poll_dir_get_events(w, allocator, &events)
+	shrink(&events)
 	return events[:]
 }
 
 // get_events_rec_poll returns all available events from a Watcher_Recursive_Poll.
 get_events_rec_poll :: proc(w: ^Watcher_Recursive_Poll, allocator := context.allocator) -> []Event {
 	events := make([dynamic]Event, 0, 16, allocator)
-	defer shrink(&events)
 	poll_rec_get_events(w, allocator, &events)
+	shrink(&events)
 	return events[:]
 }
 
