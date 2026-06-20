@@ -29,7 +29,7 @@ Native_Dir :: struct {
 	event:      windows.HANDLE,
 	iocp:       windows.HANDLE,
 	buf:        []u8,
-	overlapped: windows.OVERLAPPED,
+	overlapped: ^windows.OVERLAPPED, // heap-allocated: ReadDirectoryChangesW stores a pointer to it for the lifetime of the I/O
 }
 
 Native_File :: struct {
@@ -79,14 +79,18 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	if iocp == nil do return .Backend_Init_Failed
 	track_open(w, uintptr(iocp))
 
-	w.overlapped = windows.OVERLAPPED{hEvent=event}
+	overlapped, ovl_err := new(windows.OVERLAPPED, w.allocator)
+	if ovl_err != nil do return .Backend_Init_Failed
+	overlapped.hEvent = event
+
+	w.overlapped = overlapped
 	w.buf        = make([]u8, 4096, w.allocator)
 	w.handle     = handle
 	w.event      = event
 	w.iocp       = iocp
 	w.target     = filepath.base(w.path)
 
-	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, &w.overlapped, nil)
+	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, w.overlapped, nil)
 
 	return .None
 }
@@ -106,6 +110,9 @@ backend_file_destroy :: proc (w: Watcher_File) {
 	}
 	if w.buf != nil {
 		delete(w.buf, w.allocator)
+	}
+	if w.overlapped != nil {
+		free(w.overlapped, w.allocator)
 	}
 	track_end(w)
 }
@@ -151,13 +158,17 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 	if iocp == nil do return .Backend_Init_Failed
 	track_open(w, uintptr(iocp))
 
-	w.overlapped = windows.OVERLAPPED{hEvent=event}
+	overlapped, ovl_err := new(windows.OVERLAPPED, w.allocator)
+	if ovl_err != nil do return .Backend_Init_Failed
+	overlapped.hEvent = event
+
+	w.overlapped = overlapped
 	w.buf        = make([]u8, 4096, w.allocator)
 	w.handle     = handle
 	w.event      = event
 	w.iocp       = iocp
 
-	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, &w.overlapped, nil)
+	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, w.overlapped, nil)
 
 	return .None
 }
@@ -177,6 +188,9 @@ backend_dir_destroy :: proc (w: Watcher_Dir) {
 	}
 	if w.buf != nil {
 		delete(w.buf, w.allocator)
+	}
+	if w.overlapped != nil {
+		free(w.overlapped, w.allocator)
 	}
 	track_end(w)
 }
@@ -222,13 +236,17 @@ backend_rec_init :: proc (w: ^Watcher_Recursive) -> (err: Error) {
 	if iocp == nil do return .Backend_Init_Failed
 	track_open(w, uintptr(iocp))
 
-	w.overlapped = windows.OVERLAPPED{hEvent=event}
+	overlapped, ovl_err := new(windows.OVERLAPPED, w.allocator)
+	if ovl_err != nil do return .Backend_Init_Failed
+	overlapped.hEvent = event
+
+	w.overlapped = overlapped
 	w.buf        = make([]u8, 8192, w.allocator)
 	w.handle     = handle
 	w.event      = event
 	w.iocp       = iocp
 
-	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), true, NOTIFY_FILTER, nil, &w.overlapped, nil)
+	windows.ReadDirectoryChangesW(handle, raw_data(w.buf), windows.DWORD(len(w.buf)), true, NOTIFY_FILTER, nil, w.overlapped, nil)
 
 	return .None
 }
@@ -248,6 +266,9 @@ backend_rec_destroy :: proc (w: Watcher_Recursive) {
 	}
 	if w.buf != nil {
 		delete(w.buf, w.allocator)
+	}
+	if w.overlapped != nil {
+		free(w.overlapped, w.allocator)
 	}
 	track_end(w)
 }
@@ -308,7 +329,7 @@ iocp_drain :: proc (w: ^$W, allocator: mem.Allocator, out: ^[dynamic]Event)
 		}
 
 		windows.ResetEvent(w.event)
-		windows.ReadDirectoryChangesW(w.handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, &w.overlapped, nil)
+		windows.ReadDirectoryChangesW(w.handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, w.overlapped, nil)
 	}
 }
 
