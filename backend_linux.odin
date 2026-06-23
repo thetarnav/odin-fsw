@@ -188,74 +188,59 @@ backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator,
 //   file mode  --(IN_DELETE_SELF | IN_MOVE_SELF)-->  dir mode
 //   dir  mode  --(IN_CREATE | IN_MOVED_TO on target)--> file mode
 file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
-	in_dir_mode := w.dir_wd != 0
-	target_name := filepath.base(w.path)
+
 	buf: [INOTIFY_BUF_SIZE]byte
 	for {
 		n, errno := linux.read(w.fd, buf[:])
-		if errno == .EAGAIN || n <= 0 {
-			break
-		}
-		offset := 0
-		for offset < n {
+		if errno == .EAGAIN || n <= 0 do break
+
+		for offset := 0; offset < n; /**/ {
+
 			event := (^linux.Inotify_Event)(&buf[offset])
 			defer offset += size_of(linux.Inotify_Event) + int(event.len)
 
+			if .IGNORED in event.mask do continue
+
 			ev: Event
 			ev.is_dir = .ISDIR in event.mask
+			ev.kind   = inotify_normalize(event.mask)
 
-			if in_dir_mode {
-				name := inotify_event_name(event)
-				if name != target_name do continue
-				if .IGNORED in event.mask do continue
+			if w.dir_wd != 0 {
+				// Directory mode
 
-				if .CREATE in event.mask || .MOVED_TO in event.mask {
-					// File reappeared — switch back to file watch
-					linux.inotify_rm_watch(w.fd, w.dir_wd)
-					cs, _ := strings.clone_to_cstring(w.path, context.temp_allocator)
-					new_wd, errno2 := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
-					if errno2 == .NONE {
-						w.file_wd   = new_wd
-						w.dir_wd    = 0
-						in_dir_mode = false
-					}
-					ev.kind = .Added
-					ev.path = strings.clone(w.path, allocator)
-					append(out, ev)
-				}
-				// Other events for the target filename in dir mode are ignored.
+				if ev.kind != .Added do continue
+				if inotify_event_name(event) != filepath.base(w.path) do continue
+
+				// File reappeared — switch back to file watch
+				linux.inotify_rm_watch(w.fd, w.dir_wd)
+				cs, _ := strings.clone_to_cstring(w.path, context.temp_allocator)
+				w.file_wd, _ = linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
+				w.dir_wd = 0
+
 			} else {
-				if event.wd != w.file_wd do continue
-				if .IGNORED in event.mask do continue
+				// File mode
 
-				if .DELETE_SELF in event.mask || .MOVE_SELF in event.mask {
+				if event.wd != w.file_wd do continue
+
+				if ev.kind == .Removed {
 					// File deleted/moved — switch to parent dir watch
 					linux.inotify_rm_watch(w.fd, w.file_wd)
 					cs, _ := strings.clone_to_cstring(filepath.dir(w.path), context.temp_allocator)
-					new_wd, errno2 := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
-					if errno2 == .NONE {
-						w.dir_wd    = new_wd
-						w.file_wd   = 0
-						in_dir_mode = true
-					}
-					ev.kind = .Removed
-					ev.path = strings.clone(w.path, allocator)
-				} else {
-					ev.kind = inotify_normalize(event.mask)
-					ev.path = strings.clone(w.path, allocator)
+					w.dir_wd, _ = linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
+					w.file_wd = 0
 				}
-
-				// Coalesce consecutive .Modified events for the same path
-				if ev.kind == .Modified && len(out) > 0 {
-					last := &out[len(out)-1]
-					if last.kind == .Modified && last.path == ev.path {
-						delete(ev.path, allocator)
-						continue
-					}
-				}
-
-				append(out, ev)
 			}
+
+			// Coalesce consecutive .Modified events for the same path
+			if ev.kind == .Modified && len(out) > 0 {
+				last := &out[len(out)-1]
+				if last.kind == .Modified && last.path == ev.path {
+					continue
+				}
+			}
+
+			ev.path = strings.clone(w.path, allocator)
+			append(out, ev)
 		}
 	}
 }
