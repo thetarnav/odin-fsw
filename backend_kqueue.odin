@@ -21,11 +21,8 @@ import "core:sys/posix"
 
 Native_File :: struct {
 	kq:        posix.FD,
-	file:      ^os.File,
-	dir_mode:  bool,   // true = watching parent dir, waiting for file to reappear
-	parent_fd: ^os.File,
-	parent:    string, // absolute path of parent directory
-	target:    string, // filename being watched
+	file:      ^os.File, // nil in dir mode
+	parent_fd: ^os.File, // nil in file mode
 }
 
 Native_Dir :: struct {
@@ -58,9 +55,6 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 
 	track_start(w)
 
-	parent, target := filepath.split(w.path)
-	if parent == "" do parent = "."
-
 	file, os_err := os.open(w.path, os.O_RDONLY)
 	if os_err != nil do return .Backend_Init_Failed
 	track_open(w, uintptr(file))
@@ -86,20 +80,9 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.kq       = kq
-	w.file     = file
-	w.dir_mode = false
-
-	parent_clone, perr := strings.clone(parent, w.allocator)
-	if perr != nil do return .Backend_Init_Failed
-	w.parent = parent_clone
-
-	target_clone, terr := strings.clone(target, w.allocator)
-	if terr != nil {
-		delete(w.parent, w.allocator)
-		return .Backend_Init_Failed
-	}
-	w.target = target_clone
+	w.kq        = kq
+	w.file      = file
+	w.parent_fd = nil
 
 	return .None
 }
@@ -117,12 +100,6 @@ backend_file_destroy :: proc (w: Watcher_File) {
 	if local.parent_fd != nil {
 		os.close(local.parent_fd)
 		track_close(&local, uintptr(local.parent_fd))
-	}
-	if local.parent != "" {
-		delete(local.parent, local.allocator)
-	}
-	if local.target != "" {
-		delete(local.target, local.allocator)
 	}
 	track_end(&local)
 }
@@ -306,7 +283,7 @@ kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 		fflags := ev.fflags.vnode
 		if fflags == {} do continue
 
-		if w.dir_mode {
+		if w.parent_fd != nil {
 			// In dir mode: check if the target file has reappeared
 			stat_fi, stat_err := os.stat(w.path, context.temp_allocator)
 			if stat_err == nil {
@@ -336,7 +313,6 @@ kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 						kqueue.kevent(new_kq, []kqueue.KEvent{new_ev}, nil, nil)
 					}
 				}
-				w.dir_mode = false
 				append(out, Event{kind = .Added, path = strings.clone(w.path, allocator)})
 			}
 		} else {
@@ -351,7 +327,7 @@ kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 				track_close(w, uintptr(w.file))
 				w.file = nil
 
-				parent_file, os_err := os.open(w.parent, os.O_RDONLY)
+				parent_file, os_err := os.open(filepath.dir(w.path), os.O_RDONLY)
 				if os_err == nil {
 					track_open(w, uintptr(parent_file))
 					w.parent_fd = parent_file
@@ -368,7 +344,6 @@ kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 						kqueue.kevent(new_kq, []kqueue.KEvent{dir_ev}, nil, nil)
 					}
 				}
-				w.dir_mode = true
 			}
 			append(out, Event{kind = kind, path = strings.clone(w.path, allocator)})
 		}

@@ -26,11 +26,9 @@ INOTIFY_MASK     :: linux.Inotify_Event_Mask{
 // === Platform-specific native data ===
 
 Native_File :: struct {
-	fd:       linux.Fd,
-	wd:       linux.Wd,     // current watch descriptor (file or parent dir)
-	dir_mode: bool,           // true = wd watches parent dir, waiting for file to reappear
-	parent:   string,         // absolute path of parent directory
-	target:   string,         // filename being watched
+	fd:      linux.Fd,
+	file_wd: linux.Wd,  // valid in file mode, -1 in dir mode
+	dir_wd:  linux.Wd,  // valid in dir mode, -1 in file mode
 }
 
 Native_Dir :: struct {
@@ -49,9 +47,6 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 
 	track_start(w)
 
-	parent, target := filepath.split(w.path)
-	if parent == "" do parent = "."
-
 	fd, errno := linux.inotify_init1({.NONBLOCK, .CLOEXEC})
 	if errno != .NONE do return .Backend_Init_Failed
 	track_open(w, fd)
@@ -64,38 +59,20 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.fd       = fd
-	w.wd       = wd
-	w.dir_mode = false
-
-	parent_clone, perr := strings.clone(parent, w.allocator)
-	if perr != nil do return .Backend_Init_Failed
-	w.parent = parent_clone
-
-	target_clone, terr := strings.clone(target, w.allocator)
-	if terr != nil {
-		delete(w.parent, w.allocator)
-		return .Backend_Init_Failed
-	}
-	w.target = target_clone
+	w.fd      = fd
+	w.file_wd = wd
+	w.dir_wd  = -1
 
 	return .None
 }
 
 backend_file_destroy :: proc (w: Watcher_File) {
 	local := w
-	if local.fd >= 0 && local.wd >= 0 {
-		linux.inotify_rm_watch(local.fd, local.wd)
-	}
 	if local.fd >= 0 {
+		if local.file_wd >= 0 do linux.inotify_rm_watch(local.fd, local.file_wd)
+		if local.dir_wd  >= 0 do linux.inotify_rm_watch(local.fd, local.dir_wd)
 		linux.close(local.fd)
 		track_close(&local, local.fd)
-	}
-	if local.parent != "" {
-		delete(local.parent, local.allocator)
-	}
-	if local.target != "" {
-		delete(local.target, local.allocator)
 	}
 	track_end(&local)
 }
@@ -206,12 +183,14 @@ backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator,
 // === Shared read helper ===
 
 // inotify_read repeatedly reads the inotify fd until EAGAIN, appending events
-// to `out`. In file mode it filters by `w.wd`; in dir mode it filters by
+// to `out`. In file mode it filters by `w.file_wd`; in dir mode it filters by
 // filename and watches for the file to reappear. State transitions:
 //
 //   file mode  --(IN_DELETE_SELF | IN_MOVE_SELF)-->  dir mode
 //   dir  mode  --(IN_CREATE | IN_MOVED_TO on target)--> file mode
 file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	in_dir_mode := w.dir_wd >= 0
+	target_name := filepath.base(w.path)
 	buf: [INOTIFY_BUF_SIZE]byte
 	for {
 		n, errno := linux.read(w.fd, buf[:])
@@ -226,20 +205,20 @@ file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 			ev: Event
 			ev.is_dir = .ISDIR in event.mask
 
-			if w.dir_mode {
-				// Watching parent dir, filter by filename
+			if in_dir_mode {
 				name := inotify_event_name(event)
-				if name != w.target do continue
+				if name != target_name do continue
 				if .IGNORED in event.mask do continue
 
 				if .CREATE in event.mask || .MOVED_TO in event.mask {
 					// File reappeared — switch back to file watch
-					linux.inotify_rm_watch(w.fd, w.wd)
+					linux.inotify_rm_watch(w.fd, w.dir_wd)
 					cs, _ := strings.clone_to_cstring(w.path, context.temp_allocator)
 					new_wd, errno2 := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
 					if errno2 == .NONE {
-						w.wd       = new_wd
-						w.dir_mode = false
+						w.file_wd   = new_wd
+						w.dir_wd    = -1
+						in_dir_mode = false
 					}
 					ev.kind = .Added
 					ev.path = strings.clone(w.path, allocator)
@@ -247,18 +226,18 @@ file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 				}
 				// Other events for the target filename in dir mode are ignored.
 			} else {
-				// Watching file directly
-				if event.wd != w.wd do continue
+				if event.wd != w.file_wd do continue
 				if .IGNORED in event.mask do continue
 
 				if .DELETE_SELF in event.mask || .MOVE_SELF in event.mask {
 					// File deleted/moved — switch to parent dir watch
-					linux.inotify_rm_watch(w.fd, w.wd)
-					cs, _ := strings.clone_to_cstring(w.parent, context.temp_allocator)
+					linux.inotify_rm_watch(w.fd, w.file_wd)
+					cs, _ := strings.clone_to_cstring(filepath.dir(w.path), context.temp_allocator)
 					new_wd, errno2 := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
 					if errno2 == .NONE {
-						w.wd       = new_wd
-						w.dir_mode = true
+						w.dir_wd    = new_wd
+						w.file_wd   = -1
+						in_dir_mode = true
 					}
 					ev.kind = .Removed
 					ev.path = strings.clone(w.path, allocator)
