@@ -228,7 +228,8 @@ test_poll_recursive_watcher :: proc (t: ^testing.T) {
 
 @(test)
 test_native_file_watcher :: proc (t: ^testing.T) {
-	dir := make_temp_dir(t, "native_file")
+
+	dir := make_temp_dir(t, "native_file_watcher")
 	defer remove_all(dir)
 
 	filepath_a, _ := os.join_path({dir, "a.txt"}, context.temp_allocator)
@@ -240,11 +241,11 @@ test_native_file_watcher :: proc (t: ^testing.T) {
 	defer destroy(w)
 
 	// 1. Modify file
-	write_file(filepath_a, "modified inotify")
+	write_file(filepath_a, "first modification")
 	_, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "a.txt")
 	})
-	testing.expect(t, found, "modify: timeout")
+	testing.expect(t, found, "modify before delete: timeout")
 
 	// 2. Delete file
 	os.remove(filepath_a)
@@ -252,43 +253,15 @@ test_native_file_watcher :: proc (t: ^testing.T) {
 		return e.kind == .Removed && strings.contains(e.path, "a.txt")
 	})
 	testing.expect(t, found, "delete: timeout")
-}
 
-@(test)
-test_native_file_survives_delete_recreate :: proc (t: ^testing.T) {
-	dir := make_temp_dir(t, "native_file_recreate")
-	defer remove_all(dir)
-
-	filepath_a, _ := os.join_path({dir, "a.txt"}, context.temp_allocator)
-	write_file(filepath_a, "hello")
-
-	w, err := watch_file(filepath_a)
-	testing.expectf(t, err == .None, "watch_file error: %v", err)
-	if err != nil do return
-	defer destroy(w)
-
-	// 1. Modify file (file mode)
-	write_file(filepath_a, "first modification")
-	_, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
-		return e.kind == .Modified && strings.contains(e.path, "a.txt")
-	})
-	testing.expect(t, found, "modify before delete: timeout")
-
-	// 2. Delete file — watcher should switch to dir mode
-	os.remove(filepath_a)
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
-		return e.kind == .Removed && strings.contains(e.path, "a.txt")
-	})
-	testing.expect(t, found, "delete: timeout")
-
-	// 3. Recreate file — watcher should switch back to file mode and emit Added
+	// 3. Recreate file
 	write_file(filepath_a, "recreated")
 	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "a.txt")
 	})
 	testing.expect(t, found, "recreate: timeout")
 
-	// 4. Modify file again — should still work after recreate
+	// 4. Modify file again
 	write_file(filepath_a, "modified after recreate")
 	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "a.txt")
