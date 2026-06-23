@@ -103,7 +103,7 @@ test_poll_file_watcher :: proc (t: ^testing.T) {
 	defer destroy(w)
 
 	// 1. Modify file
-	write_file(filepath_a, "hello")
+	write_file(filepath_a, "modified content")
 	events, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "a.txt")
 	})
@@ -111,7 +111,7 @@ test_poll_file_watcher :: proc (t: ^testing.T) {
 	testing.expect(t, len(events) > 0, "modify: no events")
 
 	// 2. Modify file again
-	write_file(filepath_a, "modified content")
+	write_file(filepath_a, "modified content again")
 	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "a.txt")
 	})
