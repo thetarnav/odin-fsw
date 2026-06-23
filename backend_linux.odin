@@ -61,7 +61,6 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 
 	w.fd      = fd
 	w.file_wd = wd
-	w.dir_wd  = -1
 
 	return .None
 }
@@ -69,8 +68,8 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 backend_file_destroy :: proc (w: Watcher_File) {
 	local := w
 	if local.fd >= 0 {
-		if local.file_wd >= 0 do linux.inotify_rm_watch(local.fd, local.file_wd)
-		if local.dir_wd  >= 0 do linux.inotify_rm_watch(local.fd, local.dir_wd)
+		if local.file_wd != 0 do linux.inotify_rm_watch(local.fd, local.file_wd)
+		if local.dir_wd  != 0 do linux.inotify_rm_watch(local.fd, local.dir_wd)
 		linux.close(local.fd)
 		track_close(&local, local.fd)
 	}
@@ -189,7 +188,7 @@ backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator,
 //   file mode  --(IN_DELETE_SELF | IN_MOVE_SELF)-->  dir mode
 //   dir  mode  --(IN_CREATE | IN_MOVED_TO on target)--> file mode
 file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
-	in_dir_mode := w.dir_wd >= 0
+	in_dir_mode := w.dir_wd != 0
 	target_name := filepath.base(w.path)
 	buf: [INOTIFY_BUF_SIZE]byte
 	for {
@@ -217,7 +216,7 @@ file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 					new_wd, errno2 := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
 					if errno2 == .NONE {
 						w.file_wd   = new_wd
-						w.dir_wd    = -1
+						w.dir_wd    = 0
 						in_dir_mode = false
 					}
 					ev.kind = .Added
@@ -236,7 +235,7 @@ file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 					new_wd, errno2 := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
 					if errno2 == .NONE {
 						w.dir_wd    = new_wd
-						w.file_wd   = -1
+						w.file_wd   = 0
 						in_dir_mode = true
 					}
 					ev.kind = .Removed
