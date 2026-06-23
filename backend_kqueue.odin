@@ -20,8 +20,9 @@ import "core:sys/kqueue"
 import "core:sys/posix"
 
 Native_File :: struct {
-	kq:   posix.FD,
-	file: ^os.File,
+	kq:        posix.FD,
+	file:      ^os.File, // nil in dir mode
+	parent_fd: ^os.File, // nil in file mode
 }
 
 Native_Dir :: struct {
@@ -79,18 +80,28 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.kq   = kq
-	w.file = file
+	w.kq        = kq
+	w.file      = file
+	w.parent_fd = nil
 
 	return .None
 }
 
 backend_file_destroy :: proc (w: Watcher_File) {
-	posix.close(w.kq)
-	track_close(w, w.kq)
-	os.close(w.file)
-	track_close(w, uintptr(w.file))
-	track_end(w)
+	local := w
+	if local.kq >= 0 {
+		posix.close(local.kq)
+		track_close(&local, local.kq)
+	}
+	if local.file != nil {
+		os.close(local.file)
+		track_close(&local, uintptr(local.file))
+	}
+	if local.parent_fd != nil {
+		os.close(local.parent_fd)
+		track_close(&local, uintptr(local.parent_fd))
+	}
+	track_end(&local)
 }
 
 backend_file_get_events :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
@@ -256,18 +267,85 @@ backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator,
 
 // === Shared kqueue read helpers ===
 
+// kqueue_drain_file reads kqueue events for a Watcher_File. Implements the
+// file/dir state machine:
+//
+//   file mode  --(NOTE_DELETE | NOTE_RENAME)-->  dir mode
+//   dir  mode  --(file reappeared)------------->  file mode
 kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	for {
 		n, _ := kqueue.kevent(w.kq, nil, events[:], &no_wait)
 		if n <= 0 do break
 		ev := events[0]
-		if ev.filter == .VNode {
-			fflags := ev.fflags.vnode
-			if fflags != {} {
-				kind := kq_normalize(fflags)
-				append(out, Event{kind = kind, path = strings.clone(w.path, allocator)})
+		if ev.filter != .VNode do continue
+
+		fflags := ev.fflags.vnode
+		if fflags == {} do continue
+
+		if w.parent_fd != nil {
+			// In dir mode: check if the target file has reappeared
+			stat_fi, stat_err := os.stat(w.path, context.temp_allocator)
+			if stat_err == nil {
+				os.file_info_delete(stat_fi, context.temp_allocator)
+				// File reappeared — switch back to file watch
+				posix.close(w.kq)
+				track_close(w, w.kq)
+				w.kq = 0
+				os.close(w.parent_fd)
+				track_close(w, uintptr(w.parent_fd))
+				w.parent_fd = nil
+
+				new_kq, errno := kqueue.kqueue()
+				if errno == .NONE {
+					track_open(w, new_kq)
+					w.kq = new_kq
+					new_file, os_err := os.open(w.path, os.O_RDONLY)
+					if os_err == nil {
+						track_open(w, uintptr(new_file))
+						w.file = new_file
+						new_ev := kqueue.KEvent{
+							ident  = uintptr(os.fd(new_file)),
+							filter = .VNode,
+							flags  = {.Add, .Clear},
+						}
+						new_ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
+						kqueue.kevent(new_kq, []kqueue.KEvent{new_ev}, nil, nil)
+					}
+				}
+				append(out, Event{kind = .Added, path = strings.clone(w.path, allocator)})
 			}
+		} else {
+			// In file mode
+			kind := kq_normalize(fflags)
+			if kind == .Removed {
+				// File deleted/moved — switch to parent dir watch
+				posix.close(w.kq)
+				track_close(w, w.kq)
+				w.kq = 0
+				os.close(w.file)
+				track_close(w, uintptr(w.file))
+				w.file = nil
+
+				parent_file, os_err := os.open(filepath.dir(w.path), os.O_RDONLY)
+				if os_err == nil {
+					track_open(w, uintptr(parent_file))
+					w.parent_fd = parent_file
+					new_kq, errno := kqueue.kqueue()
+					if errno == .NONE {
+						track_open(w, new_kq)
+						w.kq = new_kq
+						dir_ev := kqueue.KEvent{
+							ident  = uintptr(os.fd(parent_file)),
+							filter = .VNode,
+							flags  = {.Add, .Clear},
+						}
+						dir_ev.fflags.vnode = {.Write, .Extend, .Attrib}
+						kqueue.kevent(new_kq, []kqueue.KEvent{dir_ev}, nil, nil)
+					}
+				}
+			}
+			append(out, Event{kind = kind, path = strings.clone(w.path, allocator)})
 		}
 	}
 }

@@ -26,8 +26,9 @@ INOTIFY_MASK     :: linux.Inotify_Event_Mask{
 // === Platform-specific native data ===
 
 Native_File :: struct {
-	fd: linux.Fd,
-	wd: linux.Wd,
+	fd:      linux.Fd,
+	file_wd: linux.Wd,  // valid in file mode, -1 in dir mode
+	dir_wd:  linux.Wd,  // valid in dir mode, -1 in file mode
 }
 
 Native_Dir :: struct {
@@ -58,20 +59,25 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 	wd, errno2 := linux.inotify_add_watch(fd, cs, INOTIFY_MASK)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
-	w.fd = fd
-	w.wd = wd
+	w.fd      = fd
+	w.file_wd = wd
 
 	return .None
 }
 
 backend_file_destroy :: proc (w: Watcher_File) {
-	linux.close(w.fd)
-	track_close(w, w.fd)
-	track_end(w)
+	local := w
+	if local.fd >= 0 {
+		if local.file_wd != 0 do linux.inotify_rm_watch(local.fd, local.file_wd)
+		if local.dir_wd  != 0 do linux.inotify_rm_watch(local.fd, local.dir_wd)
+		linux.close(local.fd)
+		track_close(&local, local.fd)
+	}
+	track_end(&local)
 }
 
 backend_file_get_events :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
-	inotify_read(w.fd, w.wd, w.path, out, allocator)
+	file_inotify_read(w, allocator, out)
 }
 
 // === Watcher_Dir ===
@@ -174,6 +180,85 @@ backend_rec_get_events :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator,
 }
 
 // === Shared read helper ===
+
+// inotify_read repeatedly reads the inotify fd until EAGAIN, appending events
+// to `out`. In file mode it filters by `w.file_wd`; in dir mode it filters by
+// filename and watches for the file to reappear. State transitions:
+//
+//   file mode  --(IN_DELETE_SELF | IN_MOVE_SELF)-->  dir mode
+//   dir  mode  --(IN_CREATE | IN_MOVED_TO on target)--> file mode
+file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dynamic]Event) {
+	in_dir_mode := w.dir_wd != 0
+	target_name := filepath.base(w.path)
+	buf: [INOTIFY_BUF_SIZE]byte
+	for {
+		n, errno := linux.read(w.fd, buf[:])
+		if errno == .EAGAIN || n <= 0 {
+			break
+		}
+		offset := 0
+		for offset < n {
+			event := (^linux.Inotify_Event)(&buf[offset])
+			defer offset += size_of(linux.Inotify_Event) + int(event.len)
+
+			ev: Event
+			ev.is_dir = .ISDIR in event.mask
+
+			if in_dir_mode {
+				name := inotify_event_name(event)
+				if name != target_name do continue
+				if .IGNORED in event.mask do continue
+
+				if .CREATE in event.mask || .MOVED_TO in event.mask {
+					// File reappeared — switch back to file watch
+					linux.inotify_rm_watch(w.fd, w.dir_wd)
+					cs, _ := strings.clone_to_cstring(w.path, context.temp_allocator)
+					new_wd, errno2 := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
+					if errno2 == .NONE {
+						w.file_wd   = new_wd
+						w.dir_wd    = 0
+						in_dir_mode = false
+					}
+					ev.kind = .Added
+					ev.path = strings.clone(w.path, allocator)
+					append(out, ev)
+				}
+				// Other events for the target filename in dir mode are ignored.
+			} else {
+				if event.wd != w.file_wd do continue
+				if .IGNORED in event.mask do continue
+
+				if .DELETE_SELF in event.mask || .MOVE_SELF in event.mask {
+					// File deleted/moved — switch to parent dir watch
+					linux.inotify_rm_watch(w.fd, w.file_wd)
+					cs, _ := strings.clone_to_cstring(filepath.dir(w.path), context.temp_allocator)
+					new_wd, errno2 := linux.inotify_add_watch(w.fd, cs, INOTIFY_MASK)
+					if errno2 == .NONE {
+						w.dir_wd    = new_wd
+						w.file_wd   = 0
+						in_dir_mode = true
+					}
+					ev.kind = .Removed
+					ev.path = strings.clone(w.path, allocator)
+				} else {
+					ev.kind = inotify_normalize(event.mask)
+					ev.path = strings.clone(w.path, allocator)
+				}
+
+				// Coalesce consecutive .Modified events for the same path
+				if ev.kind == .Modified && len(out) > 0 {
+					last := &out[len(out)-1]
+					if last.kind == .Modified && last.path == ev.path {
+						delete(ev.path, allocator)
+						continue
+					}
+				}
+
+				append(out, ev)
+			}
+		}
+	}
+}
 
 // inotify_read repeatedly reads the inotify fd until EAGAIN, appending all
 // events matching `target_wd` to `out`. Events not matching are consumed
