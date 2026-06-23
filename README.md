@@ -93,6 +93,7 @@ events := fsw.get_events(&w)
 Use the OS-native notification mechanism. Preferred when available.
 
 - `watch_file` — watch a single file for changes.
+  (continues to watch after deletion for when the file is added again)
 - `watch_dir` — watch a directory (non-recursive, immediate children only).
 - `watch_dir_recursive` — watch a directory and all subdirectories.
   New subdirectories are automatically watched.
