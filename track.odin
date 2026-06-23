@@ -25,11 +25,11 @@ when ODIN_TEST {
 		free(resources, loc=loc)
 	}
 	_track_open :: proc (resources: Track_Resources, #any_int key: int, loc: runtime.Source_Code_Location) {
-		if key < 0 do return
+		if key <= 0 do return
 		resources[key] = loc
 	}
 	_track_close :: proc (resources: Track_Resources, #any_int key: int, loc: runtime.Source_Code_Location) {
-		if key < 0 do return
+		if key <= 0 do return
 		if _, in_map := resources[key]; in_map {
 			delete_key(resources, key)
 		} else {
