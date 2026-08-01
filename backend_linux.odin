@@ -288,9 +288,13 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: 
 
 			dir_path := w.watches[event.wd] or_continue
 
-			kind   := inotify_normalize(event.mask)
-			is_dir := .ISDIR in event.mask
-			path   := dir_path
+			kind := inotify_normalize(event.mask)
+			// IN_DELETE_SELF fires on a watched item's own watch (not from the
+			// parent's watch) and without the IN_ISDIR flag. All watches in
+			// the recursive watcher are on directories, so this is always
+			// a directory.
+			is_dir := .ISDIR in event.mask || .DELETE_SELF in event.mask
+			path  := dir_path
 
 			if name := inotify_event_name(event); name != "" {
 				path = filepath.join({dir_path, name}, context.temp_allocator) or_continue
