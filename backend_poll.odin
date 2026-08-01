@@ -62,7 +62,7 @@ poll_dir_get_events :: proc (w: ^Watcher_Dir_Poll, allocator: mem.Allocator, out
 
 	for path in old {
 		if _, ok := current[path]; !ok {
-			append_event(out, .Removed, path, false, allocator)
+			append_event(out, .Removed, path, old[path].is_dir, allocator)
 		}
 	}
 
