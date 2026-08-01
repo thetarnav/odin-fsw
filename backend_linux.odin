@@ -18,9 +18,9 @@ import "core:sys/linux"
 import "core:path/filepath"
 
 INOTIFY_BUF_SIZE :: 4096
-INOTIFY_MASK     :: linux.Inotify_Event_Mask{
+INOTIFY_MASK :: linux.Inotify_Event_Mask{
 	.MODIFY, .CREATE, .DELETE, .DELETE_SELF,
-	.MOVE_SELF, .ATTRIB, .CLOSE_WRITE,
+	.MOVE_SELF, .CLOSE_WRITE,
 } | linux.IN_MOVE
 
 // === Platform-specific native data ===
@@ -231,16 +231,7 @@ file_inotify_read :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 				}
 			}
 
-			// Coalesce consecutive .Modified events for the same path
-			if ev.kind == .Modified && len(out) > 0 {
-				last := &out[len(out)-1]
-				if last.kind == .Modified && last.path == ev.path {
-					continue
-				}
-			}
-
-			ev.path = strings.clone(w.path, allocator)
-			append(out, ev)
+			append_event(out, ev.kind, w.path, ev.is_dir, allocator)
 		}
 	}
 }
@@ -268,16 +259,14 @@ inotify_read :: proc (
 
 			if event.wd != target_wd do continue
 
-			ev: Event
-			ev.is_dir = .ISDIR in event.mask
-			ev.kind = inotify_normalize(event.mask)
+			is_dir  := .ISDIR in event.mask
+			kind    := inotify_normalize(event.mask)
 			if name := inotify_event_name(event); name != "" {
-				ev.path, _ = filepath.join({parent_path, name}, allocator)
+				path, _ := filepath.join({parent_path, name}, context.temp_allocator)
+				append_event(out, kind, path, is_dir, allocator)
 			} else {
-				ev.path = strings.clone(parent_path, allocator)
+				append_event(out, kind, parent_path, is_dir, allocator)
 			}
-
-			append(out, ev)
 		}
 	}
 }
@@ -297,32 +286,22 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: 
 			event := (^linux.Inotify_Event)(&buf[offset])
 			defer offset += size_of(linux.Inotify_Event) + int(event.len)
 
-			ev: Event
-			ev.kind = inotify_normalize(event.mask)
-
 			dir_path := w.watches[event.wd] or_continue
+
+			kind   := inotify_normalize(event.mask)
+			is_dir := .ISDIR in event.mask
+			path   := dir_path
+
 			if name := inotify_event_name(event); name != "" {
-				ev.path, _ = filepath.join({dir_path, name}, allocator)
-			} else {
-				ev.path = strings.clone(dir_path, allocator)
-			}
+				path = filepath.join({dir_path, name}, context.temp_allocator) or_continue
 
-			// Auto-watch new subdirs BEFORE emitting event to avoid race
-			ev.is_dir = .ISDIR in event.mask
-			if ev.kind == .Added && ev.is_dir {
-				rec_add_watch(w, ev.path)
-			}
-
-			// Coalesce consecutive .Modified events for the same path.
-			if ev.kind == .Modified && len(out) > 0 {
-				last := &out[len(out)-1]
-				if last.kind == .Modified && last.path == ev.path {
-					delete(ev.path, allocator)
-					continue
+				// Auto-watch new subdirs BEFORE emitting event to avoid race
+				if kind == .Added && is_dir {
+					rec_add_watch(w, path)
 				}
 			}
 
-			append(out, ev)
+			append_event(out, kind, path, is_dir, allocator)
 		}
 	}
 }

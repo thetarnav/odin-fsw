@@ -18,10 +18,8 @@ import "core:path/filepath"
 import "core:strings"
 import "core:sys/windows"
 
-NOTIFY_FILTER :: windows.FILE_NOTIFY_CHANGE_FILE_NAME   |
-                 windows.FILE_NOTIFY_CHANGE_DIR_NAME    |
-                 windows.FILE_NOTIFY_CHANGE_ATTRIBUTES  |
-                 windows.FILE_NOTIFY_CHANGE_SIZE        |
+NOTIFY_FILTER :: windows.FILE_NOTIFY_CHANGE_FILE_NAME |
+                 windows.FILE_NOTIFY_CHANGE_DIR_NAME  |
                  windows.FILE_NOTIFY_CHANGE_LAST_WRITE
 
 Native_Dir :: struct {
@@ -178,51 +176,42 @@ iocp_drain :: proc (w: ^$W, allocator: mem.Allocator, out: ^[dynamic]Event)
 		windows.GetQueuedCompletionStatus(w.iocp, &bytes, &key, &overlapped_out, 50)
 		if overlapped_out == nil do break
 
-		if bytes > 0 {
-			entry := (^windows.FILE_NOTIFY_INFORMATION)(&w.buf[0])
-			for {
-				name := fni_name(entry)
-				kind := action_normalize(entry.action)
+		defer windows.ReadDirectoryChangesW(w.handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, w.overlapped, nil)
+		defer windows.ResetEvent(w.event)
 
-				e: Event
-				matched: bool
-				when W == Watcher_File {
-					if name == w.target {
-						e = {kind = kind, path = strings.clone(w.path, allocator)}
-						matched = true
-					}
-				} else {
-					fullpath, _ := filepath.join({w.path, name}, allocator)
-					e = {
-						kind   = kind,
-						path   = fullpath,
-						is_dir = entry.action == 3 || entry.action == 4,
-					}
-					matched = true
+		if bytes == 0 do continue
+
+		entry := (^windows.FILE_NOTIFY_INFORMATION)(&w.buf[0])
+		for {
+			name := fni_name(entry)
+			kind := action_normalize(entry.action)
+
+			when W == Watcher_File {
+				if name == w.target {
+					append_event(out, kind, w.path, false, allocator)
 				}
-
-				if matched {
-					append(out, e)
-				}
-				if entry.next_entry_offset == 0 do break
-
-				entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
+			} else {
+				// TODO: cache GetFileAttributes results per-batch — a single
+				// dir event can trigger N child events that all stat the
+				// same parent path.
+				fullpath, _ := filepath.join({w.path, name}, context.temp_allocator)
+				append_event(out, kind, fullpath, is_directory(fullpath), allocator)
 			}
-		}
 
-		windows.ResetEvent(w.event)
-		windows.ReadDirectoryChangesW(w.handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, w.overlapped, nil)
+			if entry.next_entry_offset == 0 do break
+			entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
+		}
 	}
 }
 
 @require_results
-action_normalize :: proc (action: u32) -> Event_Kind {
+action_normalize :: proc (action: windows.DWORD) -> Event_Kind {
 	switch action {
-	case 1: return .Added       // FILE_ACTION_ADDED
-	case 2: return .Removed     // FILE_ACTION_REMOVED
-	case 3: return .Modified    // FILE_ACTION_MODIFIED
-	case 4: return .Renamed     // FILE_ACTION_RENAMED_OLD_NAME
-	case 5: return .Renamed     // FILE_ACTION_RENAMED_NEW_NAME
+	case windows.FILE_ACTION_ADDED:            return .Added
+	case windows.FILE_ACTION_REMOVED:          return .Removed
+	case windows.FILE_ACTION_MODIFIED:         return .Modified
+	case windows.FILE_ACTION_RENAMED_OLD_NAME: return .Renamed
+	case windows.FILE_ACTION_RENAMED_NEW_NAME: return .Renamed
 	}
 	return .Modified
 }
@@ -238,4 +227,13 @@ fni_name :: proc (entry: ^windows.FILE_NOTIFY_INFORMATION) -> string {
 	str      := windows.utf16_to_utf8_buf(buf, slice)
 
 	return strings.clone(str, context.temp_allocator)
+}
+
+// is_directory returns true if the path is a directory. Uses GetFileAttributesW.
+@require_results
+is_directory :: proc (path: string) -> bool {
+	wpath := windows.utf8_to_wstring_alloc(path, context.temp_allocator)
+	if wpath == nil do return false
+	attrs := windows.GetFileAttributesW(wpath)
+	return attrs != windows.INVALID_FILE_ATTRIBUTES && (attrs & windows.FILE_ATTRIBUTE_DIRECTORY) != 0
 }

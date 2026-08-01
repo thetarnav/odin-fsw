@@ -21,7 +21,6 @@ package fsw
 
 import "core:mem"
 import "core:os"
-import "core:strings"
 
 poll_file_get_events :: proc (w: ^Watcher_File_Poll, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	os_fi, err := file_stat_alloc(w.path, w.allocator)
@@ -29,7 +28,7 @@ poll_file_get_events :: proc (w: ^Watcher_File_Poll, allocator: mem.Allocator, o
 		os.file_info_delete(os_fi, w.allocator)
 		if w.prev.size >= 0 {
 			w.prev = File_Info{size = -1}
-			append(out, Event{kind = .Removed, path = strings.clone(w.path, allocator)})
+			append_event(out, .Removed, w.path, false, allocator)
 		}
 		return
 	}
@@ -42,7 +41,7 @@ poll_file_get_events :: proc (w: ^Watcher_File_Poll, allocator: mem.Allocator, o
 	}
 	if w.prev.size < 0 {
 		w.prev = fi
-		append(out, Event{kind = .Added, path = strings.clone(w.path, allocator)})
+		append_event(out, .Added, w.path, false, allocator)
 		return
 	}
 	changed := fi.mtime != w.prev.mtime || fi.size != w.prev.size || fi.inode != w.prev.inode
@@ -52,7 +51,7 @@ poll_file_get_events :: proc (w: ^Watcher_File_Poll, allocator: mem.Allocator, o
 			kind = .Renamed
 		}
 		w.prev = fi
-		append(out, Event{kind = kind, path = strings.clone(w.path, allocator)})
+		append_event(out, kind, w.path, false, allocator)
 	}
 }
 
@@ -63,16 +62,16 @@ poll_dir_get_events :: proc (w: ^Watcher_Dir_Poll, allocator: mem.Allocator, out
 
 	for path in old {
 		if _, ok := current[path]; !ok {
-			append(out, Event{kind = .Removed, path = strings.clone(path, allocator)})
+			append_event(out, .Removed, path, false, allocator)
 		}
 	}
 
 	for path, fi in current {
 		prev, ok := old[path]
 		if !ok {
-			append(out, Event{kind = .Added, path = strings.clone(path, allocator), is_dir = fi.is_dir})
+			append_event(out, .Added, path, fi.is_dir, allocator)
 		} else if fi.mtime != prev.mtime || fi.size != prev.size {
-			append(out, Event{kind = .Modified, path = strings.clone(path, allocator), is_dir = fi.is_dir})
+			append_event(out, .Modified, path, fi.is_dir, allocator)
 		}
 	}
 
@@ -90,16 +89,16 @@ poll_rec_get_events :: proc (w: ^Watcher_Recursive_Poll, allocator: mem.Allocato
 
 	for path in old {
 		if _, in_current := current[path]; !in_current {
-			append(out, Event{kind = .Removed, path = strings.clone(path, allocator)})
+			append_event(out, .Removed, path, false, allocator)
 		}
 	}
 
 	for path, fi in current {
 		prev, in_old := old[path]
 		if !in_old {
-			append(out, Event{kind = .Added, path = strings.clone(path, allocator), is_dir = fi.is_dir})
+			append_event(out, .Added, path, fi.is_dir, allocator)
 		} else if fi.mtime != prev.mtime || fi.size != prev.size {
-			append(out, Event{kind = .Modified, path = strings.clone(path, allocator), is_dir = fi.is_dir})
+			append_event(out, .Modified, path, fi.is_dir, allocator)
 		}
 	}
 

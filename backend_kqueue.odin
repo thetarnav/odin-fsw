@@ -76,7 +76,7 @@ backend_file_init :: proc (w: ^Watcher_File) -> (err: Error) {
 		filter = .VNode,
 		flags  = {.Add, .Clear},
 	}
-	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
+	ev.fflags.vnode = {.Delete, .Write, .Extend, .Link, .Rename}
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
@@ -135,7 +135,7 @@ backend_dir_init :: proc (w: ^Watcher_Dir) -> (err: Error) {
 		filter = .VNode,
 		flags  = {.Add, .Clear},
 	}
-	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
+	ev.fflags.vnode = {.Delete, .Write, .Extend, .Link, .Rename}
 	_, errno2 := kqueue.kevent(kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE do return .Backend_Init_Failed
 
@@ -230,7 +230,7 @@ kqueue_rec_add_watch :: proc (w: ^Watcher_Recursive, dir: string) {
 		filter = .VNode,
 		flags  = {.Add, .Clear},
 	}
-	ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
+	ev.fflags.vnode = {.Delete, .Write, .Extend, .Link, .Rename}
 	_, errno2 := kqueue.kevent(w.kq, []kqueue.KEvent{ev}, nil, nil)
 	if errno2 != .NONE {
 		posix.close(fd)
@@ -309,13 +309,14 @@ kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 							filter = .VNode,
 							flags  = {.Add, .Clear},
 						}
-						new_ev.fflags.vnode = {.Delete, .Write, .Extend, .Attrib, .Link, .Rename}
+						new_ev.fflags.vnode = {.Delete, .Write, .Extend, .Link, .Rename}
 						kqueue.kevent(new_kq, []kqueue.KEvent{new_ev}, nil, nil)
 					}
 				}
-				append(out, Event{kind = .Added, path = strings.clone(w.path, allocator)})
+				append_event(out, .Added, w.path, false, allocator)
 			}
 		} else {
+
 			// In file mode
 			kind := kq_normalize(fflags)
 			if kind == .Removed {
@@ -340,16 +341,15 @@ kqueue_drain_file :: proc (w: ^Watcher_File, allocator: mem.Allocator, out: ^[dy
 							filter = .VNode,
 							flags  = {.Add, .Clear},
 						}
-						dir_ev.fflags.vnode = {.Write, .Extend, .Attrib}
+						dir_ev.fflags.vnode = {.Write, .Extend}
 						kqueue.kevent(new_kq, []kqueue.KEvent{dir_ev}, nil, nil)
 					}
 				}
 			}
-			append(out, Event{kind = kind, path = strings.clone(w.path, allocator)})
+			append_event(out, kind, w.path, false, allocator)
 		}
 	}
 }
-
 kqueue_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dynamic]Event) {
 	events: [1]kqueue.KEvent
 	_, _ = kqueue.kevent(w.kq, nil, events[:], &no_wait)
@@ -359,20 +359,20 @@ kqueue_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dyna
 	snapshot_dir_alloc(w.path, &current, w.allocator, fullpath=false, recursive=false)
 
 	for name in old {
-		if _, ok := current[name]; !ok {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			append(out, Event{kind = .Removed, path = fullpath})
-		}
+		if name in current do continue
+		fullpath := filepath.join({w.path, name}, context.temp_allocator) or_continue
+		append_event(out, .Removed, fullpath, is_dir=false, allocator=allocator)
 	}
+
 	for name, fi in current {
-		prev, ok := old[name]
-		if !ok {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
-		} else if fi.mtime != prev.mtime || fi.size != prev.size {
-			fullpath := filepath.join({w.path, name}, allocator) or_continue
-			append(out, Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir})
-		}
+		prev, in_old := old[name]
+		kind: Event_Kind = .Modified if in_old else .Added
+
+		// Ignore if nothing changed
+		if in_old && fi.mtime == prev.mtime && fi.size == prev.size do continue
+
+		fullpath := filepath.join({w.path, name}, context.temp_allocator) or_continue
+		append_event(out, kind, fullpath, fi.is_dir, allocator)
 	}
 
 	for k in old { delete(k, w.allocator) }
@@ -381,38 +381,38 @@ kqueue_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dyna
 }
 
 kqueue_drain_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+
 	events: [64]kqueue.KEvent
 	kqueue.kevent(w.kq, nil, events[:], &no_wait)
 
 	for dir_path, dir_prev in w.prev {
+
 		current := make(map[string]File_Info, w.allocator)
 		snapshot_dir_alloc(dir_path, &current, w.allocator, fullpath=false, recursive=false)
 
 		for name in dir_prev {
-			if _, ok := current[name]; !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
-				if join_err != nil { continue }
-				append(out, Event{kind = .Removed, path = fullpath})
-			}
+			if name in current do continue
+			fullpath := filepath.join({dir_path, name}, context.temp_allocator) or_continue
+			append_event(out, .Removed, fullpath, is_dir=false, allocator=allocator)
 		}
 		for name, fi in current {
-			prev_fi, ok := dir_prev[name]
-			if !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
-				if join_err != nil { continue }
-				if fi.is_dir {
-					kqueue_rec_add_watch(w, fullpath)
-				}
-				append(out, Event{kind = .Added, path = fullpath, is_dir = fi.is_dir})
-			} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
-				fullpath, join_err := filepath.join({dir_path, name}, allocator)
-				if join_err != nil { continue }
-				append(out, Event{kind = .Modified, path = fullpath, is_dir = fi.is_dir})
+			prev, in_prev := dir_prev[name]
+			kind: Event_Kind = .Modified if in_prev else .Added
+
+			// Ignore if nothing changed
+			if in_prev && fi.mtime == prev.mtime && fi.size == prev.size do continue
+
+			fullpath := filepath.join({dir_path, name}, context.temp_allocator) or_continue
+
+			if fi.is_dir && !in_prev {
+				kqueue_rec_add_watch(w, fullpath)
 			}
+			append_event(out, kind, fullpath, fi.is_dir, allocator)
 		}
 
-		for k in dir_prev { delete(k, w.allocator) }
+		for k in dir_prev do delete(k, w.allocator)
 		delete(dir_prev)
+
 		w.prev[dir_path] = current
 	}
 }

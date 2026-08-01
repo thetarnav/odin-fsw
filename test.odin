@@ -44,6 +44,15 @@ write_file :: proc (path: string, content: string) {
 	os.close(fd)
 }
 
+expect_is_dir :: proc (t: ^testing.T, events: []Event, path_suffix: string, expected: bool, loc := #caller_location) {
+	for e in events {
+		if strings.has_suffix(e.path, path_suffix) {
+			testing.expectf(t, e.is_dir == expected,
+				"is_dir for %s: got %v, expected %v", e.path, e.is_dir, expected, loc=loc)
+		}
+	}
+}
+
 // === Poll-and-collect helper ===
 //
 // Drives a watcher for up to `timeout` duration, accumulating events into
@@ -109,6 +118,7 @@ test_poll_file_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "modify: timeout")
 	testing.expect(t, len(events) > 0, "modify: no events")
+	expect_is_dir(t, events, "a.txt", false)
 
 	// 2. Modify file again
 	write_file(filepath_a, "modified content again")
@@ -117,6 +127,7 @@ test_poll_file_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "modify 2: timeout")
 	testing.expect(t, len(events) > 0, "modify 2: no events")
+	expect_is_dir(t, events, "a.txt", false)
 
 	// 3. Delete file
 	os.remove(filepath_a)
@@ -125,6 +136,7 @@ test_poll_file_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "delete: timeout")
 	testing.expect(t, len(events) > 0, "delete: no events")
+	expect_is_dir(t, events, "a.txt", false)
 
 	// 4. Recreate file — polling watcher should emit .Added
 	write_file(filepath_a, "recreated content")
@@ -133,6 +145,7 @@ test_poll_file_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "add after delete: timeout")
 	testing.expect(t, len(events) > 0, "add after delete: no events")
+	expect_is_dir(t, events, "a.txt", false)
 
 	// 5. Modify after recreate
 	write_file(filepath_a, "modified after recreate")
@@ -141,6 +154,7 @@ test_poll_file_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "modify after recreate: timeout")
 	testing.expect(t, len(events) > 0, "modify after recreate: no events")
+	expect_is_dir(t, events, "a.txt", false)
 }
 
 @(test)
@@ -161,6 +175,7 @@ test_poll_dir_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "create: timeout")
 	testing.expect(t, len(events) > 0, "create: no events")
+	expect_is_dir(t, events, "new.txt", false)
 
 	// 2. Modify file
 	write_file(file_a, "changed")
@@ -169,6 +184,7 @@ test_poll_dir_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "modify: timeout")
 	testing.expect(t, len(events) > 0, "modify: no events")
+	expect_is_dir(t, events, "new.txt", false)
 
 	// 3. Delete file
 	os.remove(file_a)
@@ -177,6 +193,7 @@ test_poll_dir_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "delete: timeout")
 	testing.expect(t, len(events) > 0, "delete: no events")
+	expect_is_dir(t, events, "new.txt", false)
 }
 
 @(test)
@@ -200,30 +217,24 @@ test_poll_recursive_watcher :: proc (t: ^testing.T) {
 		return e.kind == .Added && strings.contains(e.path, "deep.txt")
 	})
 	testing.expect(t, found, "nested create: timeout")
-
-	// Also check subdir was reported
-	has_subdir := false
-	for ev in events {
-		if ev.kind == .Added && strings.contains(ev.path, "sub") {
-			has_subdir = true
-			break
-		}
-	}
-	testing.expect(t, has_subdir, "subdir create: no Added event")
+	expect_is_dir(t, events, "deep.txt", false)
+	expect_is_dir(t, events, "sub", true)
 
 	// 2. Modify nested file
 	write_file(nested_file, "updated deep content")
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "deep.txt")
 	})
 	testing.expect(t, found, "nested modify: timeout")
+	expect_is_dir(t, events, "deep.txt", false)
 
 	// 3. Delete nested file
 	os.remove(nested_file)
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Removed && strings.contains(e.path, "deep.txt")
 	})
 	testing.expect(t, found, "nested delete: timeout")
+	expect_is_dir(t, events, "deep.txt", false)
 }
 
 @(test)
@@ -242,31 +253,35 @@ test_native_file_watcher :: proc (t: ^testing.T) {
 
 	// 1. Modify file
 	write_file(filepath_a, "first modification")
-	_, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "a.txt")
 	})
 	testing.expect(t, found, "modify before delete: timeout")
+	expect_is_dir(t, events, "a.txt", false)
 
 	// 2. Delete file
 	os.remove(filepath_a)
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Removed && strings.contains(e.path, "a.txt")
 	})
 	testing.expect(t, found, "delete: timeout")
+	expect_is_dir(t, events, "a.txt", false)
 
 	// 3. Recreate file
 	write_file(filepath_a, "recreated")
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "a.txt")
 	})
 	testing.expect(t, found, "recreate: timeout")
+	expect_is_dir(t, events, "a.txt", false)
 
 	// 4. Modify file again
 	write_file(filepath_a, "modified after recreate")
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "a.txt")
 	})
 	testing.expect(t, found, "modify after recreate: timeout")
+	expect_is_dir(t, events, "a.txt", false)
 }
 
 @(test)
@@ -282,17 +297,19 @@ test_native_dir_watcher :: proc (t: ^testing.T) {
 	// 1. Create file
 	file_a, _ := os.join_path({dir, "test.txt"}, context.temp_allocator)
 	write_file(file_a, "hello")
-	_, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "test.txt")
 	})
 	testing.expect(t, found, "create: timeout")
+	expect_is_dir(t, events, "test.txt", false)
 
 	// 2. Delete file
 	os.remove(file_a)
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Removed && strings.contains(e.path, "test.txt")
 	})
 	testing.expect(t, found, "delete: timeout")
+	expect_is_dir(t, events, "test.txt", false)
 }
 
 @(test)
@@ -308,33 +325,37 @@ test_native_recursive_watcher :: proc (t: ^testing.T) {
 	// 1. Create subdir
 	subdir, _ := os.join_path({dir, "sub"}, context.temp_allocator)
 	os.mkdir(subdir)
-	_, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "sub")
 	})
 	testing.expect(t, found, "subdir create: timeout")
+	expect_is_dir(t, events, "sub", true)
 
 	// 2. Create file in subdir (auto-watched by recursive)
 	nested, _ := os.join_path({subdir, "nested.txt"}, context.temp_allocator)
 	write_file(nested, "hello")
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "nested.txt")
 	})
 	testing.expect(t, found, "nested create: timeout")
+	expect_is_dir(t, events, "nested.txt", false)
 
 	// 3. Modify nested file
 	time.sleep(50 * time.Millisecond)
 	write_file(nested, "updated")
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "nested.txt")
 	})
 	testing.expect(t, found, "nested modify: timeout")
+	expect_is_dir(t, events, "nested.txt", false)
 
 	// 4. Delete nested file
 	os.remove(nested)
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Removed && strings.contains(e.path, "nested.txt")
 	})
 	testing.expect(t, found, "nested delete: timeout")
+	expect_is_dir(t, events, "nested.txt", false)
 }
 
 @(test)
@@ -355,16 +376,17 @@ test_glob_watcher :: proc (t: ^testing.T) {
 	// 1. Create a new .txt file (should match)
 	new_txt, _ := os.join_path({dir, "new.txt"}, context.temp_allocator)
 	write_file(new_txt, "hello")
-	_, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "new.txt")
 	})
 	testing.expect(t, found, "matching create: timeout")
+	expect_is_dir(t, events, "new.txt", false)
 
 	// 2. Create a .log file (should NOT match *.txt)
 	// We just verify no event with .log comes through within a short window.
 	new_log, _ := os.join_path({dir, "test.log"}, context.temp_allocator)
 	write_file(new_log, "log data")
-	events, _ := collect_events(t, &w, 300 * time.Millisecond, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, _ = collect_events(t, &w, 300 * time.Millisecond, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return false // never match
 	})
 	for ev in events {
@@ -374,17 +396,19 @@ test_glob_watcher :: proc (t: ^testing.T) {
 	// 3. Modify the .txt file (should match)
 	time.sleep(50 * time.Millisecond)
 	write_file(new_txt, "modified")
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "new.txt")
 	})
 	testing.expect(t, found, "matching modify: timeout")
+	expect_is_dir(t, events, "new.txt", false)
 
 	// 4. Delete the .txt file (should match)
 	os.remove(new_txt)
-	_, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Removed && strings.contains(e.path, "new.txt")
 	})
 	testing.expect(t, found, "matching delete: timeout")
+	expect_is_dir(t, events, "new.txt", false)
 }
 
 @(test)
@@ -411,7 +435,7 @@ test_stress_many_files :: proc (t: ^testing.T) {
 	// needed instead of always running out the full 5 s timeout.
 	added_count := 0
 	context.user_ptr = &added_count
-	_, found_stress := collect_events(t, &w, 5 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found_stress := collect_events(t, &w, 5 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		cnt := cast(^int)context.user_ptr
 		if e.kind == .Added && strings.contains(e.path, "stress_") {
 			cnt^ += 1
@@ -421,6 +445,7 @@ test_stress_many_files :: proc (t: ^testing.T) {
 	})
 	context.user_ptr = nil
 	testing.expect(t, found_stress, fmt.tprintf("stress: only saw %d Added events, expected >= 50", added_count))
+	expect_is_dir(t, events, "stress_", false)
 
 	// Verify watcher is still alive — create one more file with a unique name
 	probe, _ := os.join_path({dir, "PROBE_AFTER_STRESS.txt"}, context.temp_allocator)
@@ -454,10 +479,11 @@ test_stress_rapid_lifecycle :: proc (t: ^testing.T) {
 	defer destroy(w)
 
 	write_file(filepath_a, "after rapid lifecycle")
-	_, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Modified && strings.contains(e.path, "lifecycle.txt")
 	})
 	testing.expect(t, found, "final modify: timeout")
+	expect_is_dir(t, events, "lifecycle.txt", false)
 }
 
 @(test)
@@ -501,8 +527,9 @@ test_overflow_tracking :: proc (t: ^testing.T) {
 	// Verify watcher still works after the burst
 	probe, _ := os.join_path({dir, "PROBE_OVERFLOW.txt"}, context.temp_allocator)
 	write_file(probe, "hello")
-	_, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+	events, found := collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
 		return e.kind == .Added && strings.contains(e.path, "PROBE_OVERFLOW")
 	})
 	testing.expect(t, found, "post-burst probe: timeout")
+	expect_is_dir(t, events, "PROBE_OVERFLOW", false)
 }
