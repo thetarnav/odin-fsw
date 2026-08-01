@@ -356,6 +356,14 @@ test_native_recursive_watcher :: proc (t: ^testing.T) {
 	})
 	testing.expect(t, found, "nested delete: timeout")
 	expect_is_dir(t, events, "nested.txt", false)
+
+	// 5. Delete sub directory
+	os.remove(subdir)
+	events, found = collect_events(t, &w, 2 * time.Second, 10 * time.Millisecond, proc (e: ^Event) -> bool {
+		return e.kind == .Removed && strings.contains(e.path, "sub")
+	})
+	testing.expect(t, found, "subdir remove: timeout")
+	expect_is_dir(t, events, "sub", true)
 }
 
 @(test)
