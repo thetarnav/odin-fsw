@@ -359,20 +359,20 @@ kqueue_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dyna
 	snapshot_dir_alloc(w.path, &current, w.allocator, fullpath=false, recursive=false)
 
 	for name in old {
-		if _, ok := current[name]; !ok {
-			fullpath, _ := filepath.join({w.path, name}, context.temp_allocator)
-			append_event(out, .Removed, fullpath, false, allocator)
-		}
+		if name in current do continue
+		fullpath := filepath.join({w.path, name}, context.temp_allocator) or_continue
+		append_event(out, .Removed, fullpath, is_dir=false, allocator=allocator)
 	}
+
 	for name, fi in current {
-		prev, ok := old[name]
-		if !ok {
-			fullpath, _ := filepath.join({w.path, name}, context.temp_allocator)
-			append_event(out, .Added, fullpath, fi.is_dir, allocator)
-		} else if fi.mtime != prev.mtime || fi.size != prev.size {
-			fullpath, _ := filepath.join({w.path, name}, context.temp_allocator)
-			append_event(out, .Modified, fullpath, fi.is_dir, allocator)
-		}
+		prev, in_old := old[name]
+		kind: Event_Kind = .Modified if in_old else .Added
+
+		// Ignore if nothing changed
+		if in_old && fi.mtime == prev.mtime && fi.size == prev.size do continue
+
+		fullpath := filepath.join({w.path, name}, context.temp_allocator) or_continue
+		append_event(out, kind, fullpath, fi.is_dir, allocator)
 	}
 
 	for k in old { delete(k, w.allocator) }
@@ -381,38 +381,38 @@ kqueue_drain_dir :: proc (w: ^Watcher_Dir, allocator: mem.Allocator, out: ^[dyna
 }
 
 kqueue_drain_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: ^[dynamic]Event) {
+
 	events: [64]kqueue.KEvent
 	kqueue.kevent(w.kq, nil, events[:], &no_wait)
 
 	for dir_path, dir_prev in w.prev {
+
 		current := make(map[string]File_Info, w.allocator)
 		snapshot_dir_alloc(dir_path, &current, w.allocator, fullpath=false, recursive=false)
 
 		for name in dir_prev {
-			if _, ok := current[name]; !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
-				if join_err != nil { continue }
-				append_event(out, .Removed, fullpath, false, allocator)
-			}
+			if name in current do continue
+			fullpath := filepath.join({dir_path, name}, context.temp_allocator) or_continue
+			append_event(out, .Removed, fullpath, is_dir=false, allocator=allocator)
 		}
 		for name, fi in current {
-			prev_fi, ok := dir_prev[name]
-			if !ok {
-				fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
-				if join_err != nil { continue }
-				if fi.is_dir {
-					kqueue_rec_add_watch(w, fullpath)
-				}
-				append_event(out, .Added, fullpath, fi.is_dir, allocator)
-			} else if fi.mtime != prev_fi.mtime || fi.size != prev_fi.size {
-				fullpath, join_err := filepath.join({dir_path, name}, context.temp_allocator)
-				if join_err != nil { continue }
-				append_event(out, .Modified, fullpath, fi.is_dir, allocator)
+			prev, in_prev := dir_prev[name]
+			kind: Event_Kind = .Modified if in_prev else .Added
+
+			// Ignore if nothing changed
+			if in_prev && fi.mtime == prev.mtime && fi.size == prev.size do continue
+
+			fullpath := filepath.join({dir_path, name}, context.temp_allocator) or_continue
+
+			if fi.is_dir && !in_prev {
+				kqueue_rec_add_watch(w, fullpath)
 			}
+			append_event(out, kind, fullpath, fi.is_dir, allocator)
 		}
 
-		for k in dir_prev { delete(k, w.allocator) }
+		for k in dir_prev do delete(k, w.allocator)
 		delete(dir_prev)
+
 		w.prev[dir_path] = current
 	}
 }

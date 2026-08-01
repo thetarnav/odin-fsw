@@ -176,33 +176,31 @@ iocp_drain :: proc (w: ^$W, allocator: mem.Allocator, out: ^[dynamic]Event)
 		windows.GetQueuedCompletionStatus(w.iocp, &bytes, &key, &overlapped_out, 50)
 		if overlapped_out == nil do break
 
-		if bytes > 0 {
-			entry := (^windows.FILE_NOTIFY_INFORMATION)(&w.buf[0])
-			for {
-				name := fni_name(entry)
-				kind := action_normalize(entry.action)
+		defer windows.ReadDirectoryChangesW(w.handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, w.overlapped, nil)
+		defer windows.ResetEvent(w.event)
 
-				when W == Watcher_File {
-					if name == w.target {
-						append_event(out, kind, w.path, false, allocator)
-					}
-				} else {
-					// TODO: cache GetFileAttributes results per-batch — a single
-					// dir event can trigger N child events that all stat the
-					// same parent path.
-					fullpath, _ := filepath.join({w.path, name}, context.temp_allocator)
-					is_dir := is_directory(fullpath)
-					append_event(out, kind, fullpath, is_dir, allocator)
+		if bytes == 0 do continue
+
+		entry := (^windows.FILE_NOTIFY_INFORMATION)(&w.buf[0])
+		for {
+			name := fni_name(entry)
+			kind := action_normalize(entry.action)
+
+			when W == Watcher_File {
+				if name == w.target {
+					append_event(out, kind, w.path, false, allocator)
 				}
-
-				if entry.next_entry_offset == 0 do break
-
-				entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
+			} else {
+				// TODO: cache GetFileAttributes results per-batch — a single
+				// dir event can trigger N child events that all stat the
+				// same parent path.
+				fullpath, _ := filepath.join({w.path, name}, context.temp_allocator)
+				append_event(out, kind, fullpath, is_directory(fullpath), allocator)
 			}
-		}
 
-		windows.ResetEvent(w.event)
-		windows.ReadDirectoryChangesW(w.handle, raw_data(w.buf), windows.DWORD(len(w.buf)), false, NOTIFY_FILTER, nil, w.overlapped, nil)
+			if entry.next_entry_offset == 0 do break
+			entry = (^windows.FILE_NOTIFY_INFORMATION)(uintptr(entry) + uintptr(entry.next_entry_offset))
+		}
 	}
 }
 

@@ -4,7 +4,6 @@ package fsw
 
 import "core:fmt"
 import "core:os"
-import "core:path/filepath"
 import "core:strings"
 import "core:testing"
 import "core:time"
@@ -45,12 +44,9 @@ write_file :: proc (path: string, content: string) {
 	os.close(fd)
 }
 
-// expect_is_dir asserts that every event whose path ends with `path_substring`
-// has `is_dir == expected`. Using suffix match (not substring) so that a
-// directory named "sub" doesn't match a file path like "{dir}/sub/deep.txt".
-expect_is_dir :: proc (t: ^testing.T, events: []Event, path_substring: string, expected: bool, loc := #caller_location) {
+expect_is_dir :: proc (t: ^testing.T, events: []Event, path_suffix: string, expected: bool, loc := #caller_location) {
 	for e in events {
-		if strings.has_suffix(e.path, path_substring) {
+		if strings.has_suffix(e.path, path_suffix) {
 			testing.expectf(t, e.is_dir == expected,
 				"is_dir for %s: got %v, expected %v", e.path, e.is_dir, expected, loc=loc)
 		}

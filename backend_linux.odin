@@ -286,21 +286,22 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: 
 			event := (^linux.Inotify_Event)(&buf[offset])
 			defer offset += size_of(linux.Inotify_Event) + int(event.len)
 
-			kind := inotify_normalize(event.mask)
-			is_dir := .ISDIR in event.mask
-
 			dir_path := w.watches[event.wd] or_continue
+
+			kind   := inotify_normalize(event.mask)
+			is_dir := .ISDIR in event.mask
+			path   := dir_path
+
 			if name := inotify_event_name(event); name != "" {
+				path = filepath.join({dir_path, name}, context.temp_allocator) or_continue
+
 				// Auto-watch new subdirs BEFORE emitting event to avoid race
 				if kind == .Added && is_dir {
-					fullpath, _ := filepath.join({dir_path, name}, context.temp_allocator)
-					rec_add_watch(w, fullpath)
+					rec_add_watch(w, path)
 				}
-				path, _ := filepath.join({dir_path, name}, context.temp_allocator)
-				append_event(out, kind, path, is_dir, allocator)
-			} else {
-				append_event(out, kind, dir_path, is_dir, allocator)
 			}
+
+			append_event(out, kind, path, is_dir, allocator)
 		}
 	}
 }
