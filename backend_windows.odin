@@ -9,6 +9,7 @@
 //   - An I/O completion port is created with CreateIoCompletionPort
 //   - ReadDirectoryChangesW issues a single pending request; GetQueuedCompletionStatus
 //     with a 0ms timeout polls for completions
+//   - Uses GetFileAttributesW to check Event.is_dir for each event
 
 #+private package
 package fsw
