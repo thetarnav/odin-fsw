@@ -487,9 +487,10 @@ delete_events :: proc (events: []Event, allocator := context.allocator, loc := #
 	return
 }
 
-// append_event appends an event to `out`, cloning the path with `allocator`.
-// Coalesces consecutive events with the same kind and path. Overflow and
-// Invalidated events have empty paths and are never coalesced.
+// Helper to append new event to event array in `get_events`
+// - `path` get's cloned with `allocator`
+// - Coalesces consecutive events with the same kind and path
+// - Overflow and Invalidated events have empty paths and are never coalesced
 @(private)
 append_event :: proc (out: ^[dynamic]Event, kind: Event_Kind, path: string, is_dir: bool, allocator: mem.Allocator) {
 	if path != "" && len(out) > 0 {
