@@ -393,7 +393,7 @@ kqueue_drain_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: 
 		for name in dir_prev {
 			if name in current do continue
 			fullpath := filepath.join({dir_path, name}, context.temp_allocator) or_continue
-			append_event(out, .Removed, fullpath, is_dir=false, allocator=allocator)
+			append_event(out, .Removed, fullpath, is_dir=dir_prev[name].is_dir, allocator=allocator)
 		}
 		for name, fi in current {
 			prev, in_prev := dir_prev[name]
