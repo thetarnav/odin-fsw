@@ -289,7 +289,7 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: 
 			dir_path := w.watches[event.wd] or_continue
 
 			kind   := inotify_normalize(event.mask)
-			is_dir := .ISDIR in event.mask
+			is_dir := event.mask & {.ISDIR, .DELETE_SELF} != nil // DELETE_SELF fires on removed directories
 			path   := dir_path
 
 			if name := inotify_event_name(event); name != "" {
@@ -306,20 +306,14 @@ inotify_read_rec :: proc (w: ^Watcher_Recursive, allocator: mem.Allocator, out: 
 	}
 }
 
-// === Event helpers ===
-
 @require_results
 inotify_normalize :: proc (mask: linux.Inotify_Event_Mask) -> Event_Kind {
-	if .DELETE in mask || .DELETE_SELF in mask || .MOVED_FROM in mask {
-		return .Removed
+	switch {
+	case mask & {.DELETE, .DELETE_SELF, .MOVED_FROM} != nil: return .Removed
+	case mask & {.CREATE, .MOVED_TO}                 != nil: return .Added
+	case mask & {.MOVE_SELF}                         != nil: return .Renamed
+	case:                                                    return .Modified
 	}
-	if .CREATE in mask || .MOVED_TO in mask {
-		return .Added
-	}
-	if .MOVE_SELF in mask {
-		return .Renamed
-	}
-	return .Modified
 }
 
 @require_results
