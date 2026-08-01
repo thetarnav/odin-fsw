@@ -27,34 +27,29 @@ import "core:mem"
 import "core:os"
 import "core:path/filepath"
 
-// === Event types ===
-
-// Event_Kind describes the type of filesystem change detected.
 Event_Kind :: enum {
-	Added,        // A new file or directory was created.
-	Removed,      // A file or directory was deleted.
-	Modified,     // A file's content or metadata changed.
-	Renamed,      // A file or directory was moved/renamed.
-	Overflow,     // The OS event queue overflowed; events may have been lost.
-	Invalidated,  // The watch target was unmounted or became invalid.
+	Added,        // A new file or directory was created
+	Removed,      // A file or directory was deleted
+	Modified,     // A file's content or metadata changed
+	Renamed,      // A file or directory was moved/renamed
+	Overflow,     // The OS event queue overflowed; events may have been lost
+	Invalidated,  // The watch target was unmounted or became invalid
 }
 
-// Error codes returned by watcher constructors and rescan procs.
 Error :: enum {
-	None,                // No error.
-	Invalid_Path,        // The path does not exist or cannot be resolved.
-	Backend_Init_Failed, // The OS-native watcher could not be created.
+	None,                // No error
+	Invalid_Path,        // The path does not exist or cannot be resolved
+	Backend_Init_Failed, // The OS-native watcher could not be created
 }
 
-// Event represents a single filesystem change. The path string is allocated
-// with the allocator passed to get_events. Free it with that allocator.
+// Event represents a single filesystem change.
+// The path string is allocated with the allocator passed to get_events.
+//  Free it with that allocator.
 Event :: struct {
-	kind:   Event_Kind, // What happened.
-	path:   string,     // Absolute path of the affected file/directory.
-	is_dir: bool,       // True if the target is a directory.
+	kind:   Event_Kind, // What happened
+	path:   string,     // Absolute path of the affected file/directory
+	is_dir: bool,
 }
-
-// === Watcher types ===
 
 // Watcher_File watches a single file using the OS-native backend.
 Watcher_File :: struct {
@@ -490,6 +485,20 @@ delete_events :: proc (events: []Event, allocator := context.allocator, loc := #
 	}
 	delete(events, allocator, loc) or_return
 	return
+}
+
+// append_event appends an event to `out`, cloning the path with `allocator`.
+// Coalesces consecutive events with the same kind and path. Overflow and
+// Invalidated events have empty paths and are never coalesced.
+@(private)
+append_event :: proc (out: ^[dynamic]Event, kind: Event_Kind, path: string, is_dir: bool, allocator: mem.Allocator) {
+	if path != "" && len(out) > 0 {
+		last := &out[len(out)-1]
+		if last.kind == kind && last.path == path {
+			return
+		}
+	}
+	append(out, Event{kind = kind, path = strings.clone(path, allocator), is_dir = is_dir})
 }
 
 // === rescan ===
